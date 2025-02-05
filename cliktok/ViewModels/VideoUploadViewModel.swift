@@ -14,7 +14,7 @@ class VideoUploadViewModel: ObservableObject {
     
     private let storage = Storage.storage()
     private let db = Firestore.firestore()
-    private let logger = Logger(subsystem: "com.cliktok", category: "VideoUploadViewModel")
+    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "VideoUploadViewModel")
     
     func uploadVideo(videoURL: URL, caption: String, hashtags: [String]) async throws {
         guard let userID = AuthenticationManager.shared.currentUser?.uid else {

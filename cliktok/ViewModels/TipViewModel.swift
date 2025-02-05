@@ -1,6 +1,6 @@
-import Foundation
+import SwiftUI
 import FirebaseFirestore
-import StoreKit
+import StripePayments
 
 @MainActor
 class TipViewModel: ObservableObject {
@@ -8,106 +8,48 @@ class TipViewModel: ObservableObject {
     @Published var error: Error?
     @Published var tipHistory: [Tip] = []
     @Published var balance: Double = 0.0
-    @Published var selectedProduct: Product?
+    @Published var selectedAmount: Double?
     
     private let db = Firestore.firestore()
-    private let defaultTipAmount = 0.01 // $0.01 per tip
-    private let productsManager = ProductsManager.shared
+    private let paymentManager = PaymentManager.shared
     
-    var products: [Product] {
-        productsManager.products
-    }
+    let tipAmounts = [1.00, 5.00, 10.00, 20.00]
     
     var isPurchasing: Bool {
-        productsManager.purchaseInProgress
+        paymentManager.isLoading
+    }
+    
+    // MARK: - Public Methods
+    
+    func addFunds(_ amount: Double) async throws {
+        try await prepareTip(amount: amount)
+    }
+    
+    func prepareTip(amount: Double) async throws {
+        self.selectedAmount = amount
+        try await paymentManager.preparePayment(amount: amount)
+        
+        // If we get here, payment was successful
+        if let amount = selectedAmount {
+            try await processTip(amount: amount, receiverID: "RECIPIENT_ID", videoID: "VIDEO_ID") // Replace with actual IDs
+        }
     }
     
     func sendTip(to receiverID: String, for videoID: String) async throws {
-        guard let senderID = AuthenticationManager.shared.currentUser?.uid else {
-            throw NSError(domain: "Tipping", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        // Check if user has enough balance
+        if balance < 0.01 {
+            throw NSError(domain: "TipError", code: 402, userInfo: [NSLocalizedDescriptionKey: "Insufficient balance"])
         }
         
-        isProcessing = true
-        defer { isProcessing = false }
-        
-        do {
-            // Check user balance
-            if balance < defaultTipAmount {
-                throw NSError(domain: "Tipping", code: 402, userInfo: [NSLocalizedDescriptionKey: "Insufficient balance"])
-            }
-            
-            // Create transaction ID
-            let transactionID = UUID().uuidString
-            
-            // Create tip document
-            let tip = Tip(
-                videoID: videoID,
-                senderID: senderID,
-                receiverID: receiverID,
-                amount: defaultTipAmount,
-                transactionID: transactionID
-            )
-            
-            // Create transaction for sender (debit)
-            let senderTransaction = Transaction(
-                userID: senderID,
-                type: .tip,
-                amount: -defaultTipAmount,
-                status: .completed,
-                description: "Tip sent for video"
-            )
-            
-            // Create transaction for receiver (credit)
-            let receiverTransaction = Transaction(
-                userID: receiverID,
-                type: .tip,
-                amount: defaultTipAmount,
-                status: .completed,
-                description: "Tip received for video"
-            )
-            
-            // Batch write to Firestore
-            let batch = db.batch()
-            
-            // Add tip document
-            let tipRef = db.collection("tips").document(tip.id)
-            try batch.setData(from: tip, forDocument: tipRef)
-            
-            // Add transactions
-            let senderTransactionRef = db.collection("transactions").document(senderTransaction.id)
-            try batch.setData(from: senderTransaction, forDocument: senderTransactionRef)
-            
-            let receiverTransactionRef = db.collection("transactions").document(receiverTransaction.id)
-            try batch.setData(from: receiverTransaction, forDocument: receiverTransactionRef)
-            
-            // Update balances
-            let senderRef = db.collection("users").document(senderID)
-            let receiverRef = db.collection("users").document(receiverID)
-            
-            batch.updateData(["balance": FieldValue.increment(-defaultTipAmount)], forDocument: senderRef)
-            batch.updateData(["balance": FieldValue.increment(defaultTipAmount)], forDocument: receiverRef)
-            
-            // Commit the batch
-            try await batch.commit()
-            
-            // Update local balance
-            balance -= defaultTipAmount
-            
-            // Add to local tip history
-            tipHistory.append(tip)
-            
-        } catch {
-            self.error = error
-            throw error
-        }
+        try await processTip(amount: 0.01, receiverID: receiverID, videoID: videoID)
     }
     
     func loadBalance() async {
-        guard let userID = AuthenticationManager.shared.currentUser?.uid else { return }
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
         
         do {
-            let document = try await db.collection("users").document(userID).getDocument()
-            if let balance = document.data()?["balance"] as? Double {
+            let doc = try await db.collection("users").document(userId).getDocument()
+            if let balance = doc.data()?["balance"] as? Double {
                 self.balance = balance
             }
         } catch {
@@ -116,70 +58,79 @@ class TipViewModel: ObservableObject {
     }
     
     func loadTipHistory() async {
-        guard let userID = AuthenticationManager.shared.currentUser?.uid else { return }
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
         
         do {
-            let query = db.collection("tips")
-                .whereField("senderID", isEqualTo: userID)
+            let snapshot = try await db.collection("users")
+                .document(userId)
+                .collection("tips")
                 .order(by: "timestamp", descending: true)
                 .limit(to: 50)
+                .getDocuments()
             
-            let snapshot = try await query.getDocuments()
-            tipHistory = try snapshot.documents.compactMap { try $0.data(as: Tip.self) }
-        } catch {
-            self.error = error
-        }
-    }
-    
-    func addFunds(_ amount: Double) async throws {
-        guard let userID = AuthenticationManager.shared.currentUser?.uid else {
-            throw NSError(domain: "Payment", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
-        }
-        
-        isProcessing = true
-        defer { isProcessing = false }
-        
-        do {
-            let transaction = Transaction(
-                userID: userID,
-                type: .deposit,
-                amount: amount,
-                status: .completed,
-                description: "Added funds to wallet"
-            )
-            
-            // Create batch write
-            let batch = db.batch()
-            
-            // Add transaction
-            let transactionRef = db.collection("transactions").document(transaction.id)
-            try batch.setData(from: transaction, forDocument: transactionRef)
-            
-            // Update balance
-            let userRef = db.collection("users").document(userID)
-            batch.updateData(["balance": FieldValue.increment(amount)], forDocument: userRef)
-            
-            // Commit the batch
-            try await batch.commit()
-            
-            // Update local balance
-            balance += amount
-            
-        } catch {
-            self.error = error
-            throw error
-        }
-    }
-    
-    func purchaseCoins(_ product: Product) async throws {
-        do {
-            let success = try await productsManager.purchase(product)
-            if success {
-                await loadBalance()
+            self.tipHistory = snapshot.documents.compactMap { doc -> Tip? in
+                let data = doc.data()
+                guard let amount = data["amount"] as? Double,
+                      let timestamp = data["timestamp"] as? Timestamp,
+                      let videoID = data["videoID"] as? String,
+                      let senderID = data["senderID"] as? String,
+                      let receiverID = data["receiverID"] as? String,
+                      let transactionID = data["transactionID"] as? String else {
+                    return nil
+                }
+                return Tip(id: doc.documentID,
+                          amount: amount,
+                          timestamp: timestamp.dateValue(),
+                          videoID: videoID,
+                          senderID: senderID,
+                          receiverID: receiverID,
+                          transactionID: transactionID)
             }
         } catch {
             self.error = error
-            throw error
         }
     }
-} 
+    
+    // MARK: - Private Methods
+    
+    private func processTip(amount: Double, receiverID: String, videoID: String) async throws {
+        guard let senderID = AuthenticationManager.shared.currentUser?.uid else {
+            throw NSError(domain: "TipError", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid tip amount or user"])
+        }
+        
+        let transactionID = UUID().uuidString
+        
+        // Record the tip in Firestore
+        let tipRef = db.collection("users").document(senderID).collection("tips").document()
+        let tip = [
+            "amount": amount,
+            "timestamp": Timestamp(),
+            "videoID": videoID,
+            "senderID": senderID,
+            "receiverID": receiverID,
+            "transactionID": transactionID
+        ] as [String : Any]
+        
+        try await tipRef.setData(tip)
+        
+        // Update recipient's balance
+        let recipientRef = db.collection("users").document(receiverID)
+        try await db.runTransaction { transaction, errorPointer in
+            let recipientDoc: DocumentSnapshot
+            do {
+                try recipientDoc = transaction.getDocument(recipientRef)
+            } catch let fetchError as NSError {
+                errorPointer?.pointee = fetchError
+                return nil
+            }
+            
+            let currentBalance = (recipientDoc.data()?["balance"] as? Double) ?? 0
+            transaction.updateData(["balance": currentBalance + amount], forDocument: recipientRef)
+            return nil
+        }
+        
+        // Refresh the UI
+        await loadBalance()
+        await loadTipHistory()
+    }
+}

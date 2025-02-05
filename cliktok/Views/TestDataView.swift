@@ -6,7 +6,7 @@ struct TestDataView: View {
     @StateObject private var networkMonitor = NetworkMonitor.shared
     @State private var isLoading = false
     @State private var error: Error?
-    private let logger = Logger(subsystem: "com.cliktok", category: "TestDataView")
+    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "TestDataView")
     
     var body: some View {
         NavigationView {

@@ -15,6 +15,8 @@ struct VideoPlayerView: View {
     @State private var showTipAlert = false
     @State private var showAddFundsAlert = false
     @State private var tipSent = false
+    @State private var showError = false
+    @State private var errorMessage = ""
     
     var body: some View {
         GeometryReader { geometry in
@@ -146,9 +148,12 @@ struct VideoPlayerView: View {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                             tipSent = false
                         }
-                    } catch {
-                        if (error as NSError).code == 402 {
+                    } catch let error as NSError {
+                        if error.code == 402 {
                             showAddFundsAlert = true
+                        } else {
+                            showError = true
+                            errorMessage = error.localizedDescription
                         }
                     }
                 }
@@ -162,13 +167,20 @@ struct VideoPlayerView: View {
                 Task {
                     do {
                         try await tipViewModel.addFunds(1.00) // Add $1.00
+                        await tipViewModel.loadBalance()
                     } catch {
-                        // Handle error
+                        showError = true
+                        errorMessage = error.localizedDescription
                     }
                 }
             }
         } message: {
             Text("Your balance is too low. Would you like to add more funds?")
+        }
+        .alert("Error", isPresented: $showError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(errorMessage)
         }
         .onAppear {
             setupAudioSession()
@@ -181,14 +193,12 @@ struct VideoPlayerView: View {
     }
     
     private func setupAudioSession() {
-        #if os(iOS)
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("Failed to set up audio session: \(error.localizedDescription)")
         }
-        #endif
     }
     
     private func setupPlayer() {
@@ -199,42 +209,14 @@ struct VideoPlayerView: View {
         let playerItem = AVPlayerItem(asset: asset)
         
         // Create player and set audio volume
-        player = AVPlayer(playerItem: playerItem)
-        player?.volume = isMuted ? 0 : 1
-        isPlaying = true
-        
-        // Enable looping
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-        
-        player?.play()
+        let player = AVPlayer(playerItem: playerItem)
+        player.isMuted = isMuted
+        self.player = player
     }
     
     private func toggleMute() {
         isMuted.toggle()
-        player?.volume = isMuted ? 0 : 1
-    }
-    
-    private func togglePlayback() {
-        isPlaying.toggle()
-        if isPlaying {
-            player?.play()
-        } else {
-            player?.pause()
-        }
-    }
-    
-    private func toggleLike() {
-        isLiked.toggle()
-        Task {
-            await viewModel.updateVideoStats(video: video, liked: isLiked)
-        }
+        player?.isMuted = isMuted
     }
 }
-#endif 
+#endif

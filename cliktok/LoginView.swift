@@ -3,12 +3,15 @@ import FirebaseAuth
 import AuthenticationServices
 
 struct LoginView: View {
-    @StateObject private var authManager = AuthenticationManager()
+    // Use StateObject to observe changes
+    @StateObject private var authManager = AuthenticationManager.shared
+    
     @State private var email = ""
     @State private var password = ""
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var isSignUp = false
+    @State private var isLoading = false
     
     var body: some View {
         NavigationView {
@@ -24,14 +27,19 @@ struct LoginView: View {
                     .textContentType(isSignUp ? .username : .emailAddress)
                     .autocorrectionDisabled()
                     .submitLabel(.next)
+                    .disabled(isLoading)
                 
                 SecureField("Password", text: $password)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .textContentType(isSignUp ? .newPassword : .password)
                     .submitLabel(.done)
+                    .disabled(isLoading)
                 
                 Button(action: {
                     Task {
+                        isLoading = true
+                        defer { isLoading = false }
+                        
                         do {
                             if isSignUp {
                                 try await authManager.signUp(email: email, password: password)
@@ -44,13 +52,38 @@ struct LoginView: View {
                         }
                     }
                 }) {
-                    Text(isSignUp ? "Sign Up" : "Sign In")
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .cornerRadius(10)
+                    HStack {
+                        Text(isSignUp ? "Sign Up" : "Sign In")
+                        if isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .cornerRadius(10)
                 }
+                .disabled(isLoading || email.isEmpty || password.isEmpty)
+                
+                Button(action: {
+                    Task {
+                        isLoading = true
+                        defer { isLoading = false }
+                        
+                        do {
+                            try await authManager.signInAnonymously()
+                        } catch {
+                            showError = true
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }) {
+                    Text("Continue as Guest")
+                        .foregroundColor(.gray)
+                }
+                .disabled(isLoading)
                 
                 Button(action: {
                     withAnimation {
@@ -62,6 +95,7 @@ struct LoginView: View {
                     Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
                         .foregroundColor(.blue)
                 }
+                .disabled(isLoading)
                 
                 if showError {
                     Text(errorMessage)
@@ -71,7 +105,8 @@ struct LoginView: View {
                 }
             }
             .padding()
+            .disabled(isLoading)
         }
         .navigationViewStyle(StackNavigationViewStyle())
     }
-} 
+}

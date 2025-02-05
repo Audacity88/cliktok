@@ -10,12 +10,13 @@ import SwiftData
 import FirebaseAuth
 
 struct ContentView: View {
-    @StateObject private var authManager = AuthenticationManager()
     @StateObject private var feedViewModel = VideoFeedViewModel()
-    @EnvironmentObject private var productsManager: ProductsManager
     @State private var showingTestData = false
     @State private var showingVideoUpload = false
     @State private var selectedTab = 0
+    
+    // Use the shared instance as a StateObject to observe changes
+    @StateObject private var authManager = AuthenticationManager.shared
     
     init() {
         // Set the unselected color to gray
@@ -62,7 +63,6 @@ struct ContentView: View {
                 
                 NavigationStack {
                     WalletView()
-                        .environmentObject(productsManager)
                 }
                 .tabItem {
                     Image(systemName: "creditcard.fill")

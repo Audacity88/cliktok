@@ -1,11 +1,11 @@
 {
-  "identifier" : "com.cliktok.iap",
+  "identifier" : "gauntletai.cliktok",
   "nonRenewingSubscriptions" : [],
   "products" : [
     {
       "displayPrice" : "0.99",
       "familyShareable" : false,
-      "internalID" : "com.cliktok.coins.1",
+      "internalID" : "gauntletai.cliktok.coins.1",
       "localizations" : [
         {
           "description" : "Add $1.00 to your wallet",
@@ -13,14 +13,14 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "com.cliktok.coins.1",
+      "productID" : "gauntletai.cliktok.coins.1",
       "referenceName" : "1 Dollar Coins",
       "type" : "Consumable"
     },
     {
       "displayPrice" : "4.99",
       "familyShareable" : false,
-      "internalID" : "com.cliktok.coins.5",
+      "internalID" : "gauntletai.cliktok.coins.5",
       "localizations" : [
         {
           "description" : "Add $5.00 to your wallet",
@@ -28,14 +28,14 @@
           "locale" : "en_US"
         }
       ],
-      "productID" : "com.cliktok.coins.5",
+      "productID" : "gauntletai.cliktok.coins.5",
       "referenceName" : "5 Dollar Coins",
       "type" : "Consumable"
     }
   ],
   "settings" : {
-    "_applicationInternalID" : "com.cliktok",
-    "_developerTeamID" : "YOURTEAMID",
+    "_applicationInternalID" : "gauntletai.cliktok",
+    "_developerTeamID" : "JAAQKRTXQ6",
     "_lastSynchronizedDate" : 719161957.89432895,
     "_timeRate" : 0
   },

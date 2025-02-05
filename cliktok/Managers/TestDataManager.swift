@@ -25,7 +25,7 @@ class TestDataManager {
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
     private let maxRetries = 3
-    private let logger = Logger(subsystem: "com.cliktok", category: "TestDataManager")
+    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "TestDataManager")
     
     func testFirebaseConnection() async throws {
         self.logger.debug("Testing Firebase connection...")
