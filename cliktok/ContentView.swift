@@ -14,24 +14,29 @@ struct ContentView: View {
     @StateObject private var feedViewModel = VideoFeedViewModel()
     @State private var showingTestData = false
     @State private var showingVideoUpload = false
+    @State private var selectedTab = 0
+    
+    init() {
+        // Set the unselected color to gray
+        UITabBar.appearance().unselectedItemTintColor = .gray
+    }
     
     var body: some View {
-        NavigationView {
-            if authManager.isAuthenticated {
-                VideoFeedView()
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button(action: {
+        if authManager.isAuthenticated {
+            TabView(selection: $selectedTab) {
+                NavigationStack {
+                    VideoFeedView()
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbarBackground(.visible, for: .navigationBar)
+                        .toolbarBackground(Color.black, for: .navigationBar)
+                        .navigationBarItems(
+                            leading: Button(action: {
                                 try? authManager.signOut()
                             }) {
                                 Text("Sign Out")
                                     .foregroundColor(.white)
-                            }
-                        }
-                        
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            HStack {
+                            },
+                            trailing: HStack {
                                 Button(action: {
                                     showingVideoUpload = true
                                 }) {
@@ -46,23 +51,73 @@ struct ContentView: View {
                                         .foregroundColor(.white)
                                 }
                             }
-                        }
-                    }
-                    .sheet(isPresented: $showingTestData) {
-                        TestDataView()
-                            .environmentObject(feedViewModel)
-                    }
-                    .sheet(isPresented: $showingVideoUpload) {
-                        VideoUploadView()
-                            .environmentObject(feedViewModel)
-                    }
-                    .environmentObject(feedViewModel)
-            } else {
-                LoginView()
+                        )
+                }
+                .tabItem {
+                    Image(systemName: "play.circle.fill")
+                    Text("Feed")
+                }
+                .tag(0)
+                
+                NavigationStack {
+                    WalletView()
+                }
+                .tabItem {
+                    Image(systemName: "creditcard.fill")
+                    Text("Wallet")
+                }
+                .tag(1)
             }
+            .onChange(of: selectedTab) { oldValue, newValue in
+                // Update tab bar appearance based on selected tab
+                let tabBarAppearance = newValue == 1 ? lightAppearance : darkAppearance
+                UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
+                UITabBar.appearance().standardAppearance = tabBarAppearance
+            }
+            .sheet(isPresented: $showingTestData) {
+                TestDataView()
+            }
+            .sheet(isPresented: $showingVideoUpload) {
+                VideoUploadView()
+                    .environmentObject(feedViewModel)
+            }
+        } else {
+            LoginView()
         }
-        .navigationViewStyle(StackNavigationViewStyle())
     }
+    
+    // Store appearances as properties to avoid recreation
+    private let lightAppearance: UITabBarAppearance = {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .white
+        
+        // Selected state - black
+        appearance.stackedLayoutAppearance.selected.iconColor = .black
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.black]
+        
+        // Unselected state - gray
+        appearance.stackedLayoutAppearance.normal.iconColor = .gray
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        
+        return appearance
+    }()
+    
+    private let darkAppearance: UITabBarAppearance = {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .black
+        
+        // Selected state - white
+        appearance.stackedLayoutAppearance.selected.iconColor = .white
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
+        
+        // Unselected state - gray
+        appearance.stackedLayoutAppearance.normal.iconColor = .gray
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        
+        return appearance
+    }()
 }
 
 #Preview {

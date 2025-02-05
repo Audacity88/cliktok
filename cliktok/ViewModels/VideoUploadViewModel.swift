@@ -50,7 +50,10 @@ class VideoUploadViewModel: ObservableObject {
                 hashtags: hashtags
             )
             
-            try await db.collection("videos").document().setData(from: video)
+            // Create document reference with auto-generated ID and set data
+            let docRef = db.collection("videos").document()
+            let data = try Firestore.Encoder().encode(video)
+            try await docRef.setData(data)
             
             isUploading = false
             progress = 1.0
@@ -72,7 +75,7 @@ class VideoUploadViewModel: ObservableObject {
         metadata.contentType = "image/jpeg"
         
         return try await withCheckedThrowingContinuation { continuation in
-            let task = thumbnailRef.putData(thumbnailData, metadata: metadata) { metadata, error in
+            _ = thumbnailRef.putData(thumbnailData, metadata: metadata) { metadata, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                     return
@@ -96,7 +99,7 @@ class VideoUploadViewModel: ObservableObject {
         metadata.contentType = "video/mp4"
         
         return try await withCheckedThrowingContinuation { continuation in
-            let task = storageRef.putFile(from: videoURL, metadata: metadata) { metadata, error in
+            let uploadTask = storageRef.putFile(from: videoURL, metadata: metadata) { metadata, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                     return
@@ -113,7 +116,7 @@ class VideoUploadViewModel: ObservableObject {
                 }
             }
             
-            task.observe(.progress) { [weak self] snapshot in
+            uploadTask.observe(.progress) { [weak self] snapshot in
                 guard let self = self else { return }
                 let percentComplete = Double(snapshot.progress?.completedUnitCount ?? 0) / Double(snapshot.progress?.totalUnitCount ?? 1)
                 DispatchQueue.main.async {
@@ -127,20 +130,23 @@ class VideoUploadViewModel: ObservableObject {
         let asset = AVURLAsset(url: videoURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
-        imageGenerator.maximumSize = CGSize(width: 1280, height: 720)
         
         // Get thumbnail from first frame
-        let time = CMTime(value: 0, timescale: 1)
-        let cgImage = try await imageGenerator.image(at: time).image
+        let cgImage = try await imageGenerator.image(at: .zero).image
         
-        // Convert to UIImage and compress
+        // Convert CGImage to UIImage
         let thumbnail = UIImage(cgImage: cgImage)
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
-        guard let data = thumbnail.jpegData(compressionQuality: 0.8) else {
-            throw NSError(domain: "VideoUpload", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to create thumbnail data"])
-        }
         
-        try data.write(to: tempURL)
-        return tempURL
+        // Create temporary URL for thumbnail
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+        let thumbnailURL = temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+        
+        // Write thumbnail to temporary file
+        if let thumbnailData = thumbnail.jpegData(compressionQuality: 0.8) {
+            try thumbnailData.write(to: thumbnailURL)
+            return thumbnailURL
+        } else {
+            throw NSError(domain: "ThumbnailGeneration", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to generate thumbnail data"])
+        }
     }
 } 

@@ -23,11 +23,6 @@
   - [x] Lazy loading mechanism
   - [ ] Video preloading
   - [x] Smooth scrolling optimization
-- [ ] Tipping System
-  - [ ] Like button with tip functionality
-  - [ ] Multiple tip tracking
-  - [ ] Tip animation and feedback
-  - [ ] Tip history storage
 
 ## 3. Video Creation & Upload
 - [ ] Camera Integration
@@ -35,18 +30,23 @@
   - [ ] Video recording functionality
   - [ ] Basic camera controls
   - [ ] Front/back camera switching
-- [ ] Video Upload System
-  - [ ] Firebase Storage integration
-  - [ ] Upload progress tracking
-  - [ ] Video compression
+- [x] Video Upload System
+  - [x] Firebase Storage integration
+  - [x] Upload progress tracking
+  - [x] Video compression
   - [ ] Background upload support
 - [ ] Video Enhancement
   - [ ] Basic filters
-  - [ ] Caption addition
-  - [ ] Hashtag support
-  - [ ] Thumbnail generation
+  - [x] Caption addition
+  - [x] Hashtag support
+  - [x] Thumbnail generation
 
 ## 4. Payment & Tipping Infrastructure
+- [ ] Tipping System
+  - [ ] Like button with tip functionality
+  - [ ] Multiple tip tracking
+  - [ ] Tip animation and feedback
+  - [ ] Tip history storage
 - [ ] Stripe Integration
   - [ ] Stripe SDK setup
   - [ ] Payment method management

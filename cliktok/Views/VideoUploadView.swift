@@ -30,7 +30,7 @@ struct VideoUploadView: View {
                         ProgressView("Uploading...", value: viewModel.progress, total: 1.0)
                     }
                     
-                    if let videoURL = videoURL {
+                    if videoURL != nil {
                         Button("Preview Video") {
                             showingPreview = true
                         }
@@ -62,7 +62,7 @@ struct VideoUploadView: View {
                     }
                 }
             }
-            .onChange(of: selectedItem) { newValue in
+            .onChange(of: selectedItem) { oldValue, newValue in
                 if let newValue {
                     handleSelection(newValue)
                 }
@@ -73,8 +73,8 @@ struct VideoUploadView: View {
                 Text(alertMessage)
             }
             .sheet(isPresented: $showingPreview) {
-                if let videoURL = videoURL {
-                    VideoPreviewView(videoURL: videoURL)
+                if let previewURL = videoURL {
+                    VideoPreviewView(videoURL: previewURL)
                 }
             }
             .onAppear {
