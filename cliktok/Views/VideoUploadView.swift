@@ -5,6 +5,7 @@ import AVKit
 struct VideoUploadView: View {
     @StateObject private var viewModel = VideoUploadViewModel()
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
     @State private var selectedItem: PhotosPickerItem?
     @State private var caption = ""
@@ -76,6 +77,14 @@ struct VideoUploadView: View {
                     VideoPreviewView(videoURL: videoURL)
                 }
             }
+            .onAppear {
+                viewModel.onUploadComplete = {
+                    Task {
+                        await feedViewModel.loadInitialVideos()
+                        dismiss()
+                    }
+                }
+            }
         }
     }
     
@@ -118,9 +127,6 @@ struct VideoUploadView: View {
                     caption: caption,
                     hashtags: hashtagArray
                 )
-                await MainActor.run {
-                    dismiss()
-                }
             } catch {
                 await MainActor.run {
                     alertMessage = error.localizedDescription

@@ -10,6 +10,7 @@ class VideoUploadViewModel: ObservableObject {
     @Published var isUploading = false
     @Published var progress: Double = 0
     @Published var error: Error?
+    var onUploadComplete: (() -> Void)?
     
     private let storage = Storage.storage()
     private let db = Firestore.firestore()
@@ -53,6 +54,11 @@ class VideoUploadViewModel: ObservableObject {
             
             isUploading = false
             progress = 1.0
+            
+            // Notify that upload is complete
+            await MainActor.run {
+                onUploadComplete?()
+            }
             
         } catch {
             isUploading = false
