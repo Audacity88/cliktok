@@ -8,9 +8,19 @@ class TipViewModel: ObservableObject {
     @Published var error: Error?
     @Published var tipHistory: [Tip] = []
     @Published var balance: Double = 0.0
+    @Published var selectedProduct: Product?
     
     private let db = Firestore.firestore()
     private let defaultTipAmount = 0.01 // $0.01 per tip
+    private let productsManager = ProductsManager.shared
+    
+    var products: [Product] {
+        productsManager.products
+    }
+    
+    var isPurchasing: Bool {
+        productsManager.purchaseInProgress
+    }
     
     func sendTip(to receiverID: String, for videoID: String) async throws {
         guard let senderID = AuthenticationManager.shared.currentUser?.uid else {
@@ -155,6 +165,18 @@ class TipViewModel: ObservableObject {
             // Update local balance
             balance += amount
             
+        } catch {
+            self.error = error
+            throw error
+        }
+    }
+    
+    func purchaseCoins(_ product: Product) async throws {
+        do {
+            let success = try await productsManager.purchase(product)
+            if success {
+                await loadBalance()
+            }
         } catch {
             self.error = error
             throw error
