@@ -12,6 +12,7 @@ import FirebaseAuth
 struct ContentView: View {
     @StateObject private var authManager = AuthenticationManager()
     @State private var showingTestData = false
+    @State private var showingVideoUpload = false
     
     var body: some View {
         NavigationView {
@@ -29,16 +30,28 @@ struct ContentView: View {
                         }
                         
                         ToolbarItem(placement: .navigationBarTrailing) {
-                            Button(action: {
-                                showingTestData = true
-                            }) {
-                                Image(systemName: "plus.circle")
-                                    .foregroundColor(.white)
+                            HStack {
+                                Button(action: {
+                                    showingVideoUpload = true
+                                }) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .foregroundColor(.white)
+                                }
+                                
+                                Button(action: {
+                                    showingTestData = true
+                                }) {
+                                    Image(systemName: "plus.circle")
+                                        .foregroundColor(.white)
+                                }
                             }
                         }
                     }
                     .sheet(isPresented: $showingTestData) {
                         TestDataView()
+                    }
+                    .sheet(isPresented: $showingVideoUpload) {
+                        VideoUploadView()
                     }
             } else {
                 LoginView()

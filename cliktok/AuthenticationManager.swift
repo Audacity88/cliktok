@@ -2,8 +2,14 @@ import Foundation
 import FirebaseAuth
 
 class AuthenticationManager: ObservableObject {
+    static let shared = AuthenticationManager()
+    
     @Published var isAuthenticated = false
     @Published var userEmail: String?
+    
+    var currentUser: User? {
+        Auth.auth().currentUser
+    }
     
     init() {
         Auth.auth().addStateDidChangeListener { [weak self] _, user in

@@ -5,54 +5,59 @@
 ---
 
 ## **1. Introduction**
-SwipeVid is a social networking app that combines short-form video content with a matching and messaging system. Users can scroll through an infinite feed of videos and swipe right on content they like. If two users mutually swipe right on each other's videos, they become friends and can message each other.
+ClikTok is a short-form video platform that enables content creators to monetize their content through micro-tipping. Users can scroll through an infinite feed of videos and show their appreciation by tipping creators $0.01 with each like. The platform focuses on empowering creators while providing engaging content to viewers.
 
 ---
 
 ## **2. Objectives & Goals**
-- Create an engaging and addictive platform for video content and social networking.
-- Provide seamless video recording and uploading directly from the camera.
-- Introduce a unique matching mechanism based on video preference.
-- Ensure a smooth and scalable user experience with real-time messaging and notifications.
+- Create an engaging and addictive platform for video content consumption
+- Enable seamless micro-tipping through a simple like-based mechanism
+- Provide creators with a direct monetization path through viewer appreciation
+- Ensure transparent tracking of earnings and tips for both creators and viewers
+- Create a sustainable creator economy through micro-transactions
 
 ---
 
 ## **3. User Stories**
-### **3.1 Browsing & Swiping**
-- As a user, I want to scroll through an infinite feed of videos so that I can discover new content.
-- As a user, I want to swipe right on videos I like so that I can connect with people who share similar interests.
-- As a user, I want to swipe left to skip videos that don’t interest me.
+### **3.1 Browsing & Tipping**
+- As a viewer, I want to scroll through an infinite feed of videos to discover new content
+- As a viewer, I want to tip creators $0.01 by clicking the like button to show my appreciation
+- As a viewer, I want to click like multiple times to send additional tips to creators I really enjoy
+- As a viewer, I want to see my tipping history and manage my tipping balance
 
-### **3.2 Video Uploading & Recording**
-- As a user, I want to record and upload videos directly from my camera so that I can share content instantly.
-- As a user, I want to add captions and hashtags to my videos for better discoverability.
-- As a user, I want to apply basic filters and effects to my videos to enhance my content.
+### **3.2 Creator Features**
+- As a creator, I want to see who has tipped my videos so I can engage with my supporters
+- As a creator, I want to track my earnings from tips in real-time
+- As a creator, I want to withdraw my earnings once they reach a certain threshold
+- As a creator, I want to see analytics about which videos earn the most tips
 
-### **3.3 Matching & Messaging**
-- As a user, I want to be notified when someone swipes right on my video.
-- As a user, I want to receive a match notification when both users swipe right.
-- As a user, I want to chat with my matches so that I can connect with them.
-- As a user, I want to see my matches in a dedicated section.
+### **3.3 Video Uploading & Recording**
+- As a creator, I want to record and upload videos directly from my camera
+- As a creator, I want to add captions and hashtags to my videos for better discoverability
+- As a creator, I want to apply basic filters and effects to my videos
 
 ### **3.4 Profile & Settings**
-- As a user, I want to create a profile with my username, bio, and profile picture.
-- As a user, I want to see my uploaded videos on my profile.
-- As a user, I want to adjust my privacy settings, including who can see my videos.
+- As a user, I want to create a profile with my username, bio, and profile picture
+- As a user, I want to manage my payment methods and tipping settings
+- As a user, I want to see my uploaded videos and earnings on my profile
+- As a user, I want to adjust my privacy settings
 
 ---
 
 ## **4. Features & Requirements**
 ### **4.1 Core Features**
-- **Infinite Scroll Video Feed**: Users can continuously scroll through videos.
-- **Swipe Matching**: Users swipe right on videos they like; mutual swipes create a connection.
-- **Video Upload & Recording**: Users can record and upload videos directly from their phone.
-- **Direct Messaging**: Users can message mutual connections.
-- **Profile Management**: Users can customize their profile, view their uploaded videos, and manage their connections.
+- **Infinite Scroll Video Feed**: Users can continuously scroll through videos
+- **Tipping System**: Users can tip creators $0.01 per like, with multiple likes allowed
+- **Payment Integration**: Secure payment processing for tips and creator payouts
+- **Earnings Dashboard**: Creators can track tips, viewers, and total earnings
+- **Video Upload & Recording**: Users can record and upload videos directly
+- **Profile Management**: Users can customize their profile and manage payment settings
 
 ### **4.2 Additional Features (Future Releases)**
-- **Video Editing Tools**: Add text, stickers, and basic editing tools.
-- **Live Streaming**: Users can go live and interact with their audience.
-- **AI-Based Recommendations**: Personalize the video feed based on user behavior.
+- **Custom Tip Amounts**: Allow users to set custom tip amounts beyond $0.01
+- **Subscription Model**: Monthly support options for favorite creators
+- **Creator Analytics**: Advanced metrics about earnings and viewer engagement
+- **AI-Based Recommendations**: Personalize the video feed based on tipping behavior
 
 ---
 
@@ -61,43 +66,46 @@ SwipeVid is a social networking app that combines short-form video content with 
 - Mobile App: iOS (Swift, UIKit/SwiftUI)
 - UI Components: Lottie (for animations), Texture (AsyncDisplayKit) for efficient UI rendering
 - Video Playback: HLS / AVPlayer (iOS)
+- Payment SDK: Stripe SDK for payment processing
 
 ### **5.2 Backend**
 - **Firebase-Based Backend** (No dedicated server)
 - Database: Firebase Firestore
 - Cloud Storage: Firebase Storage
 - Authentication: Firebase Auth
-- Serverless Functions: Firebase Cloud Functions for backend logic
-- Push Notifications: Firebase Cloud Messaging (FCM)
-- Real-Time Chat: Firebase Realtime Database
+- Payment Processing: Stripe API integration
+- Serverless Functions: Firebase Cloud Functions for payment processing
+- Real-Time Updates: Firebase Realtime Database for tip tracking
 
 ### **5.3 Third-Party Integrations**
+- Payment Processing: Stripe
 - Video Processing: FFmpeg (Cloud Functions if needed)
 - AI Moderation: Google Cloud Vision API (for content moderation)
 
 ---
 
 ## **6. User Interface & Experience (UI/UX)**
-- **Home Screen**: Infinite video feed with swipe gestures.
-- **Profile Page**: User bio, uploaded videos, and settings.
-- **Messaging Screen**: Chat with matched users.
-- **Video Recording Screen**: Simple UI for recording and uploading videos.
+- **Home Screen**: Infinite video feed with prominent like/tip button
+- **Profile Page**: User bio, uploaded videos, and earnings/tipping history
+- **Earnings Dashboard**: Real-time tracking of tips received and given
+- **Video Recording Screen**: Simple UI for recording and uploading videos
 
 ---
 
 ## **7. Success Metrics**
-- **User Engagement**: Average time spent per session.
-- **Swipe Rate**: Number of right swipes per user.
-- **Match Rate**: Percentage of mutual swipes.
-- **Retention Rate**: Users returning after 7 days.
-- **DAU/MAU**: Daily and Monthly Active Users.
+- **User Engagement**: Average time spent per session
+- **Tipping Rate**: Average tips per user per session
+- **Creator Earnings**: Average earnings per creator
+- **Retention Rate**: Users returning after 7 days
+- **DAU/MAU**: Daily and Monthly Active Users
 
 ---
 
 ## **8. Risks & Mitigation**
-- **Scalability**: Firebase auto-scales with demand.
-- **Content Moderation**: AI-powered moderation tools to detect inappropriate content.
-- **User Safety**: Privacy settings, reporting system, and moderation team.
+- **Payment Security**: PCI compliance through Stripe
+- **Fraud Prevention**: Implement tip limits and fraud detection
+- **Content Moderation**: AI-powered moderation tools
+- **User Safety**: Privacy settings and reporting system
 
 ---
 
@@ -105,12 +113,12 @@ SwipeVid is a social networking app that combines short-form video content with 
 | Milestone | Timeline |
 |-----------|----------|
 | Wireframes & UI Design | Month 1 |
-| MVP Development | Months 2-4 |
+| Payment Integration & MVP | Months 2-4 |
 | Beta Testing | Month 5 |
 | Launch | Month 6 |
 
 ---
 
 ## **10. Conclusion**
-SwipeVid aims to revolutionize social networking by combining short-form videos with an interactive matching system. By focusing on user engagement, seamless video sharing, and meaningful connections, this app has the potential to redefine how people interact with video content.
+ClikTok aims to revolutionize content monetization through micro-tipping, creating a direct connection between creators and their audience. By focusing on seamless video sharing and easy tipping mechanics, this app has the potential to create a sustainable creator economy powered by viewer appreciation.
 
