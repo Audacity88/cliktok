@@ -2,17 +2,27 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Allow development mode access
+    function isDevelopmentMode() {
+      return request.auth != null && request.auth.token.developmentMode == true;
+    }
+    
+    // Allow any operation in development mode
+    match /{document=**} {
+      allow read, write: if isDevelopmentMode();
+    }
+    
     // User profiles
     match /users/{userId} {
-      allow read: if request.auth != null;
+      allow read: if request.auth != null && request.auth.uid == userId;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
     
     // Tips collection
     match /tips/{tipId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null 
-        && request.auth.uid == request.resource.data.senderID;
+      allow create: if request.auth != null && 
+                    request.auth.uid == request.resource.data.senderID;
       allow update, delete: if request.auth != null 
         && request.auth.uid == resource.data.senderID;
     }
@@ -23,12 +33,12 @@ service cloud.firestore {
       allow read: if true;
       
       // Allow creating videos if authenticated and userID matches
-      allow create: if request.auth != null 
-        && request.resource.data.userID == request.auth.uid;
+      allow create: if request.auth != null && 
+                   (request.resource.data.userID == request.auth.uid || isDevelopmentMode());
       
       // Allow updating/deleting if you own the video
-      allow update, delete: if request.auth != null 
-        && resource.data.userID == request.auth.uid;
+      allow update, delete: if request.auth != null && 
+        (resource.data.userID == request.auth.uid || isDevelopmentMode());
     }
   }
 }

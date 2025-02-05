@@ -28,6 +28,7 @@ struct WalletView: View {
     @StateObject private var tipViewModel = TipViewModel()
     @State private var showError = false
     @State private var errorMessage = ""
+    @Environment(\.colorScheme) private var colorScheme
     
     var body: some View {
         NavigationView {
@@ -55,7 +56,7 @@ struct WalletView: View {
                 // Recent Tips Section
                 Section("Recent Tips") {
                     if tipViewModel.tipHistory.isEmpty {
-                        Text("No tips yet")
+                        Text("No recent tips")
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(tipViewModel.tipHistory) { tip in
@@ -64,23 +65,23 @@ struct WalletView: View {
                     }
                 }
             }
-            .navigationTitle("Wallet")
-            .background(Color.white)
             .scrollContentBackground(.hidden)
-            .refreshable {
+            .background(colorScheme == .dark ? Color.black : Color.white)
+            .listStyle(InsetGroupedListStyle())
+            .navigationTitle("Wallet")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(colorScheme == .dark ? Color.black : Color.white, for: .navigationBar)
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage)
+            }
+            .onAppear {
                 Task {
                     await tipViewModel.loadBalance()
                     await tipViewModel.loadTipHistory()
                 }
-            }
-            .alert("Error", isPresented: $showError) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(errorMessage)
-            }
-            .task {
-                await tipViewModel.loadBalance()
-                await tipViewModel.loadTipHistory()
             }
         }
     }
@@ -93,7 +94,7 @@ struct BalanceRow: View {
     
     var body: some View {
         HStack {
-            Text("Balance")
+            Text("Current Balance")
             Spacer()
             Text("$\(String(format: "%.2f", balance))")
                 .bold()
@@ -109,13 +110,16 @@ struct AddFundsRow: View {
     var body: some View {
         Button(action: onTap) {
             HStack {
-                Text("$\(String(format: "%.2f", amount))")
+                Text("+$\(String(format: "%.2f", amount))")
                 Spacer()
                 if isPurchasing {
                     ProgressView()
+                } else {
+                    Image(systemName: "plus.circle.fill")
                 }
             }
         }
+        .buttonStyle(PlainButtonStyle())
         .disabled(isPurchasing)
     }
 }

@@ -4,17 +4,16 @@ import AVFoundation
 
 #if os(iOS)
 struct VideoPlayerView: View {
-    let video: Video
-    @StateObject private var viewModel = VideoFeedViewModel()
     @StateObject private var tipViewModel = TipViewModel()
+    @StateObject private var viewModel = VideoFeedViewModel()
+    let video: Video
     @State private var player: AVPlayer?
-    @State private var isPlaying = false
     @State private var isMuted = false
-    @State private var isLiked = false
     @State private var showControls = true
     @State private var showAddFundsAlert = false
     @State private var showError = false
     @State private var errorMessage = ""
+    @State private var showWallet = false
     @State private var totalTips = 0
     @State private var showTipBubble = false
     @State private var showTippedText = false
@@ -22,38 +21,13 @@ struct VideoPlayerView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Video Layer
                 if let player = player {
                     VideoPlayer(player: player)
                         .edgesIgnoringSafeArea(.all)
                         .frame(width: geometry.size.width, height: geometry.size.height)
-                        .onAppear {
-                            player.play()
-                            isPlaying = true
-                            Task {
-                                await viewModel.updateVideoStats(video: video, viewed: true)
-                                await tipViewModel.loadBalance()
-                            }
-                        }
-                        .onDisappear {
-                            player.pause()
-                            isPlaying = false
-                        }
                 } else {
-                    // Show thumbnail or loading placeholder
-                    if let thumbnailURL = video.thumbnailURL,
-                       let url = URL(string: thumbnailURL) {
-                        AsyncImage(url: url) { image in
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                        } placeholder: {
-                            ProgressView()
-                        }
-                    } else {
-                        Color.black
-                    }
+                    Color.black
+                        .edgesIgnoringSafeArea(.all)
                 }
                 
                 // Overlay Controls
@@ -187,6 +161,21 @@ struct VideoPlayerView: View {
                     .padding(.horizontal)
                 }
             }
+            .onAppear {
+                print("VideoPlayerView appeared for video: \(video.id)")
+                loadAndPlayVideo()
+                
+                // Load balance in development mode only
+                if PaymentManager.shared.isDevelopmentMode {
+                    Task {
+                        await tipViewModel.loadBalance()
+                    }
+                }
+            }
+            .onDisappear {
+                print("VideoPlayerView disappeared for video: \(video.id)")
+                cleanupPlayer()
+            }
         }
         .alert("Insufficient Balance", isPresented: $showAddFundsAlert) {
             Button("Add Funds") {
@@ -209,36 +198,54 @@ struct VideoPlayerView: View {
         } message: {
             Text(errorMessage)
         }
-        .onAppear {
-            setupAudioSession()
-            setupPlayer()
-        }
-        .onDisappear {
-            player?.pause()
-            player = nil
-        }
     }
     
-    private func setupAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to set up audio session: \(error.localizedDescription)")
+    private func loadAndPlayVideo() {
+        guard let url = URL(string: video.videoURL) else {
+            print("Invalid URL for video: \(video.id)")
+            return
         }
+        
+        print("Loading video from URL: \(url)")
+        
+        // Create new player
+        let newPlayer = AVPlayer(url: url)
+        newPlayer.isMuted = isMuted
+        
+        // Configure looping
+        NotificationCenter.default.removeObserver(self)
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: newPlayer.currentItem,
+            queue: .main
+        ) { [weak newPlayer] _ in
+            // print("Video finished playing, looping: \(video.id)")
+            newPlayer?.seek(to: .zero)
+            newPlayer?.play()
+        }
+        
+        // Set up error observation
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: newPlayer.currentItem,
+            queue: .main
+        ) { notification in
+            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                print("Error playing video: \(error.localizedDescription)")
+            }
+        }
+        
+        // Set the player and play
+        self.player = newPlayer
+        newPlayer.play()
+        print("Started playing video: \(video.id)")
     }
     
-    private func setupPlayer() {
-        guard let url = URL(string: video.videoURL) else { return }
-        
-        // Create player item with preferred audio settings
-        let asset = AVURLAsset(url: url)
-        let playerItem = AVPlayerItem(asset: asset)
-        
-        // Create player and set audio volume
-        let player = AVPlayer(playerItem: playerItem)
-        player.isMuted = isMuted
-        self.player = player
+    private func cleanupPlayer() {
+        print("Cleaning up player for video: \(video.id)")
+        NotificationCenter.default.removeObserver(self)
+        player?.pause()
+        player = nil
     }
     
     private func toggleMute() {

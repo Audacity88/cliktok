@@ -47,7 +47,6 @@ class PaymentManager: NSObject, ObservableObject {
     // MARK: - Development Mode
     
     private let defaults = UserDefaults.standard
-    private let balanceKey = "com.cliktok.userBalance"
     private let isDevelopmentModeKey = "com.cliktok.isDevelopmentMode"
     
     @Published private(set) var isDevelopmentMode: Bool {
@@ -56,36 +55,32 @@ class PaymentManager: NSObject, ObservableObject {
         }
     }
     
-    @Published private(set) var balance: Decimal {
-        didSet {
-            defaults.set(NSDecimalNumber(decimal: balance).stringValue, forKey: balanceKey)
-        }
-    }
+    private var currentBalance: Decimal = 0.0
     
     private override init() {
         // Load development mode state
         self.isDevelopmentMode = defaults.bool(forKey: isDevelopmentModeKey)
         
-        // Load saved balance or default to 0
-        if let balanceStr = defaults.string(forKey: balanceKey),
-           let savedBalance = Decimal(string: balanceStr) {
-            self.balance = savedBalance
-        } else {
-            self.balance = 0
-        }
+        // Initialize balance to 0
+        self.currentBalance = 0
         
         super.init()
         
+        // Load saved balance
+        let savedBalance = defaults.double(forKey: "userBalance")
+        self.currentBalance = Decimal(savedBalance)
+        
+        // Set development mode for debug builds
         #if DEBUG
-        // Enable development mode by default in debug builds
-        if !defaults.bool(forKey: isDevelopmentModeKey) {
-            isDevelopmentMode = true
+        if !defaults.bool(forKey: "didSetInitialDevelopmentMode") {
+            self.isDevelopmentMode = true
             defaults.set(true, forKey: isDevelopmentModeKey)
+            defaults.set(true, forKey: "didSetInitialDevelopmentMode")
         }
         #endif
         
         print("PaymentManager initialized in \(isDevelopmentMode ? "development" : "production") mode")
-        print("Current balance: \(balance)")
+        print("Current balance: \(currentBalance)")
         
         // Only configure server connection if not in development mode
         if !isDevelopmentMode {
@@ -452,35 +447,36 @@ class PaymentManager: NSObject, ObservableObject {
             return
         }
         
-        balance += amount
-        print("Added \(amount) test money. New balance: \(balance)")
+        addBalance(amount: amount)
+        print("Added \(amount) test money. New balance: \(currentBalance)")
+    }
+    
+    func addBalance(amount: Decimal) {
+        currentBalance += amount
+        UserDefaults.standard.set(NSDecimalNumber(decimal: currentBalance).doubleValue, forKey: "userBalance")
     }
     
     func useBalance(amount: Decimal) -> Bool {
-        guard amount > 0 else {
-            print("Invalid amount: \(amount)")
+        guard amount <= currentBalance else {
             return false
         }
-        
-        guard balance >= amount else {
-            print("Insufficient balance: \(balance) < \(amount)")
-            return false
-        }
-        
-        balance -= amount
-        print("Deducted \(amount). New balance: \(balance)")
+        currentBalance -= amount
+        UserDefaults.standard.set(NSDecimalNumber(decimal: currentBalance).doubleValue, forKey: "userBalance")
         return true
     }
     
     func getCurrentBalance() -> Decimal {
-        return balance
+        return currentBalance
+    }
+    
+    func loadBalance() {
+        let savedBalance = UserDefaults.standard.double(forKey: "userBalance")
+        currentBalance = Decimal(savedBalance)
     }
     
     func toggleDevelopmentMode() {
-        #if DEBUG
         isDevelopmentMode.toggle()
-        print("Development mode \(isDevelopmentMode ? "enabled" : "disabled")")
-        #endif
+        print("Switched to \(isDevelopmentMode ? "development" : "production") mode")
     }
     
     // MARK: - Helper Functions

@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseFirestore
 import StripePayments
+import Foundation
 
 @MainActor
 class TipViewModel: ObservableObject {
@@ -74,9 +75,7 @@ class TipViewModel: ObservableObject {
     @MainActor
     func loadBalance() async {
         if paymentManager.isDevelopmentMode {
-            let currentBalance = paymentManager.getCurrentBalance()
-            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
-            print("Loaded balance: $\(String(format: "%.2f", balance))")
+            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
         } else {
             guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
             
@@ -91,13 +90,12 @@ class TipViewModel: ObservableObject {
                         "createdAt": FieldValue.serverTimestamp(),
                         "updatedAt": FieldValue.serverTimestamp()
                     ])
-                    self.balance = 0.0
-                } else if let balance = doc.data()?["balance"] as? Double {
-                    self.balance = balance
+                    balance = 0.0
+                } else if let userBalance = doc.data()?["balance"] as? Double {
+                    balance = userBalance
                 }
             } catch {
                 print("Error loading balance: \(error)")
-                self.error = error
             }
         }
     }
@@ -143,33 +141,35 @@ class TipViewModel: ObservableObject {
         guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
         
         do {
-            let snapshot = try await db.collection("users")
-                .document(userId)
-                .collection("tips")
+            let querySnapshot = try await db.collection("tips")
+                .whereField("senderID", isEqualTo: userId)
                 .order(by: "timestamp", descending: true)
-                .limit(to: 50)
+                .limit(to: 10)
                 .getDocuments()
             
-            self.tipHistory = snapshot.documents.compactMap { doc -> Tip? in
-                let data = doc.data()
-                guard let amount = data["amount"] as? Double,
-                      let timestamp = data["timestamp"] as? Timestamp,
+            tipHistory = querySnapshot.documents.compactMap { document -> Tip? in
+                let data = document.data()
+                guard let id = document.documentID as String?,
+                      let amount = data["amount"] as? Double,
+                      let timestamp = (data["timestamp"] as? Timestamp)?.dateValue(),
                       let videoID = data["videoID"] as? String,
                       let senderID = data["senderID"] as? String,
                       let receiverID = data["receiverID"] as? String,
-                      let transactionID = data["transactionID"] as? String else {
-                    return nil
-                }
-                return Tip(id: doc.documentID,
-                          amount: amount,
-                          timestamp: timestamp.dateValue(),
-                          videoID: videoID,
-                          senderID: senderID,
-                          receiverID: receiverID,
-                          transactionID: transactionID)
+                      let transactionID = data["transactionID"] as? String
+                else { return nil }
+                
+                return Tip(
+                    id: id,
+                    amount: amount,
+                    timestamp: timestamp,
+                    videoID: videoID,
+                    senderID: senderID,
+                    receiverID: receiverID,
+                    transactionID: transactionID
+                )
             }
         } catch {
-            self.error = error
+            print("Error loading tip history: \(error)")
         }
     }
     
@@ -181,15 +181,8 @@ class TipViewModel: ObservableObject {
         }
         
         let tipId = UUID().uuidString
-        let tip = Tip(
-            id: tipId,
-            amount: amount,
-            timestamp: Date(),
-            videoID: videoID,
-            senderID: senderID,
-            receiverID: receiverID,
-            transactionID: tipId
-        )
+        let now = Date()
+        let timestamp = Timestamp(date: now)
         
         do {
             // Create or get sender document
@@ -199,8 +192,8 @@ class TipViewModel: ObservableObject {
             if !senderDoc.exists {
                 try await senderRef.setData([
                     "balance": 0.0,
-                    "createdAt": FieldValue.serverTimestamp(),
-                    "updatedAt": FieldValue.serverTimestamp()
+                    "createdAt": timestamp,
+                    "updatedAt": timestamp
                 ])
             }
             
@@ -211,8 +204,8 @@ class TipViewModel: ObservableObject {
             if !receiverDoc.exists {
                 try await receiverRef.setData([
                     "balance": 0.0,
-                    "createdAt": FieldValue.serverTimestamp(),
-                    "updatedAt": FieldValue.serverTimestamp()
+                    "createdAt": timestamp,
+                    "updatedAt": timestamp
                 ])
             }
             
@@ -223,25 +216,34 @@ class TipViewModel: ObservableObject {
             // Update balances
             try await senderRef.updateData([
                 "balance": senderBalance - amount,
-                "updatedAt": FieldValue.serverTimestamp()
+                "updatedAt": timestamp
             ])
             
             try await receiverRef.updateData([
                 "balance": receiverBalance + amount,
-                "updatedAt": FieldValue.serverTimestamp()
+                "updatedAt": timestamp
             ])
             
             // Record the tip
-            try await db.collection("tips").document(tip.id).setData([
-                "senderID": tip.senderID,
-                "receiverID": tip.receiverID,
-                "videoID": tip.videoID,
-                "amount": tip.amount,
-                "timestamp": tip.timestamp,
-                "transactionID": tip.transactionID
+            try await db.collection("tips").document(tipId).setData([
+                "senderID": senderID,
+                "receiverID": receiverID,
+                "videoID": videoID,
+                "amount": amount,
+                "timestamp": timestamp,
+                "transactionID": tipId
             ])
             
-            // Update local tip history
+            // Add tip to local history
+            let tip = Tip(
+                id: tipId,
+                amount: amount,
+                timestamp: now,
+                videoID: videoID,
+                senderID: senderID,
+                receiverID: receiverID,
+                transactionID: tipId
+            )
             tipHistory.append(tip)
             
         } catch {
@@ -250,7 +252,34 @@ class TipViewModel: ObservableObject {
         }
     }
     
+    @MainActor
     func sendMinimumTip(receiverID: String, videoID: String) async throws {
-        try await processTip(amount: 0.01, receiverID: receiverID, videoID: videoID)
+        let tipAmount = 0.01 // 1 cent tip
+        
+        if paymentManager.isDevelopmentMode {
+            // Check if we have enough balance
+            let currentBalance = paymentManager.getCurrentBalance()
+            if currentBalance < Decimal(tipAmount) {
+                throw PaymentError.insufficientFunds
+            }
+            
+            // Deduct from balance
+            if !paymentManager.useBalance(amount: Decimal(tipAmount)) {
+                throw PaymentError.insufficientFunds
+            }
+            
+            // Record the tip
+            try await processTip(amount: tipAmount, receiverID: receiverID, videoID: videoID)
+            
+            // Update local balance
+            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+        } else {
+            // Handle production mode
+            try await prepareTip(amount: tipAmount)
+            try await processTip(amount: tipAmount, receiverID: receiverID, videoID: videoID)
+        }
+        
+        // Refresh tip history
+        await loadTipHistory()
     }
 }

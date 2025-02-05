@@ -56,8 +56,8 @@ struct ContentView: View {
                         )
                 }
                 .tabItem {
-                    Image(systemName: "play.circle.fill")
-                    Text("Feed")
+                    Image(systemName: "house.fill")
+                    Text("Home")
                 }
                 .tag(0)
                 
@@ -65,10 +65,19 @@ struct ContentView: View {
                     WalletView()
                 }
                 .tabItem {
-                    Image(systemName: "creditcard.fill")
+                    Image(systemName: "dollarsign.circle.fill")
                     Text("Wallet")
                 }
                 .tag(1)
+                
+                NavigationStack {
+                    ProfileView()
+                }
+                .tabItem {
+                    Image(systemName: "person.fill")
+                    Text("Profile")
+                }
+                .tag(2)
             }
             .onChange(of: selectedTab) { oldValue, newValue in
                 // Update tab bar appearance based on selected tab

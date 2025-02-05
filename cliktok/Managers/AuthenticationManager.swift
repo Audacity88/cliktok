@@ -9,7 +9,7 @@ class AuthenticationManager: ObservableObject {
     @Published var userEmail: String?
     @Published var isAnonymous = false
     
-    var currentUser: User? {
+    var currentUser: FirebaseAuth.User? {
         Auth.auth().currentUser
     }
     
