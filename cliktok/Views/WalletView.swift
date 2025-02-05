@@ -45,12 +45,7 @@ struct WalletView: View {
                             isPurchasing: tipViewModel.isPurchasing,
                             onTap: {
                                 Task {
-                                    do {
-                                        try await tipViewModel.prepareTip(amount: amount)
-                                    } catch {
-                                        showError = true
-                                        errorMessage = error.localizedDescription
-                                    }
+                                    await tipViewModel.addFunds(amount)
                                 }
                             }
                         )

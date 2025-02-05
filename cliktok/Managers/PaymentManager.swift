@@ -10,6 +10,8 @@ enum PaymentError: LocalizedError {
     case serverError(String)
     case networkError(String)
     case invalidResponse
+    case insufficientFunds
+    case invalidURL
     
     var errorDescription: String? {
         switch self {
@@ -21,6 +23,10 @@ enum PaymentError: LocalizedError {
             return "Network error: \(message)"
         case .invalidResponse:
             return "Invalid server response"
+        case .insufficientFunds:
+            return "Insufficient funds"
+        case .invalidURL:
+            return "Invalid URL"
         }
     }
 }
@@ -38,8 +44,56 @@ class PaymentManager: NSObject, ObservableObject {
     private var retryCount = 0
     private let maxRetries = 3
     
+    // MARK: - Development Mode
+    
+    private let defaults = UserDefaults.standard
+    private let balanceKey = "com.cliktok.userBalance"
+    private let isDevelopmentModeKey = "com.cliktok.isDevelopmentMode"
+    
+    @Published private(set) var isDevelopmentMode: Bool {
+        didSet {
+            defaults.set(isDevelopmentMode, forKey: isDevelopmentModeKey)
+        }
+    }
+    
+    @Published private(set) var balance: Decimal {
+        didSet {
+            defaults.set(NSDecimalNumber(decimal: balance).stringValue, forKey: balanceKey)
+        }
+    }
+    
     private override init() {
+        // Load development mode state
+        self.isDevelopmentMode = defaults.bool(forKey: isDevelopmentModeKey)
+        
+        // Load saved balance or default to 0
+        if let balanceStr = defaults.string(forKey: balanceKey),
+           let savedBalance = Decimal(string: balanceStr) {
+            self.balance = savedBalance
+        } else {
+            self.balance = 0
+        }
+        
         super.init()
+        
+        #if DEBUG
+        // Enable development mode by default in debug builds
+        if !defaults.bool(forKey: isDevelopmentModeKey) {
+            isDevelopmentMode = true
+            defaults.set(true, forKey: isDevelopmentModeKey)
+        }
+        #endif
+        
+        print("PaymentManager initialized in \(isDevelopmentMode ? "development" : "production") mode")
+        print("Current balance: \(balance)")
+        
+        // Only configure server connection if not in development mode
+        if !isDevelopmentMode {
+            configureServerConnection()
+        }
+    }
+    
+    private func configureServerConnection() {
         print("Initializing PaymentManager with baseURL: \(baseURL)")
         
         // Configure Alamofire for development
@@ -341,53 +395,101 @@ class PaymentManager: NSObject, ObservableObject {
         return interfaces
     }
     
-    func preparePayment(amount: Double) async throws {
+    @MainActor
+    func createPaymentIntent(amount: Int) async throws -> String {
+        if isDevelopmentMode {
+            // Convert cents to dollars for the balance check
+            let dollars = NSDecimalNumber(value: Double(amount) / 100.0).decimalValue
+            print("Checking balance for payment: \(dollars) dollars")
+            // In development mode, just deduct from balance
+            if useBalance(amount: dollars) {
+                return "dev_payment_success"
+            } else {
+                throw PaymentError.insufficientFunds
+            }
+        }
+        
         guard isConfigured else {
             throw PaymentError.notConfigured
         }
         
-        isLoading = true
-        defer { isLoading = false }
+        guard let url = URL(string: "\(baseURL)/create-payment-intent") else {
+            throw PaymentError.invalidURL
+        }
+        
+        let parameters: Parameters = [
+            "amount": amount,
+            "currency": "usd"
+        ]
+        
+        let headers: HTTPHeaders = [
+            .accept("application/json"),
+            .contentType("application/json"),
+            .userAgent("CliktokApp/1.0")
+        ]
         
         do {
-            let headers: HTTPHeaders = [
-                .accept("application/json"),
-                .contentType("application/json"),
-                .userAgent("CliktokApp/1.0")
-            ]
-            
-            let parameters: [String: Any] = ["amount": amount, "currency": "usd"]
-            
-            let response = try await AF.request("\(baseURL)/create-payment-intent",
-                                              method: .post,
-                                              parameters: parameters,
-                                              encoding: JSONEncoding.default,
-                                              headers: headers)
-                .serializingDecodable(PaymentIntentResponse.self)
+            let response = try await alamofireSession.request(url,
+                                                            method: .post,
+                                                            parameters: parameters,
+                                                            encoding: JSONEncoding.default,
+                                                            headers: headers)
+                .serializingDecodable(CreatePaymentIntentResponse.self)
                 .value
             
-            let paymentIntentParams = STPPaymentIntentParams(clientSecret: response.clientSecret)
-            let paymentHandler = STPPaymentHandler.shared()
-            
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                paymentHandler.confirmPayment(paymentIntentParams, with: self) { status, _, error in
-                    switch status {
-                    case .succeeded:
-                        continuation.resume()
-                    case .failed:
-                        continuation.resume(throwing: PaymentError.serverError(error?.localizedDescription ?? "Payment failed"))
-                    case .canceled:
-                        continuation.resume(throwing: PaymentError.serverError("Payment canceled"))
-                    @unknown default:
-                        continuation.resume(throwing: PaymentError.serverError("Unknown payment status"))
-                    }
-                }
-            }
+            return response.clientSecret
         } catch {
-            let paymentError = error as? PaymentError ?? PaymentError.networkError(error.localizedDescription)
-            self.error = paymentError
-            throw paymentError
+            print("Payment intent creation failed: \(error)")
+            throw PaymentError.serverError(error.localizedDescription)
         }
+    }
+    
+    // MARK: - Public Interface
+    
+    func addTestMoney(amount: Decimal) {
+        guard isDevelopmentMode else {
+            print("Cannot add test money in production mode")
+            return
+        }
+        
+        balance += amount
+        print("Added \(amount) test money. New balance: \(balance)")
+    }
+    
+    func useBalance(amount: Decimal) -> Bool {
+        guard amount > 0 else {
+            print("Invalid amount: \(amount)")
+            return false
+        }
+        
+        guard balance >= amount else {
+            print("Insufficient balance: \(balance) < \(amount)")
+            return false
+        }
+        
+        balance -= amount
+        print("Deducted \(amount). New balance: \(balance)")
+        return true
+    }
+    
+    func getCurrentBalance() -> Decimal {
+        return balance
+    }
+    
+    func toggleDevelopmentMode() {
+        #if DEBUG
+        isDevelopmentMode.toggle()
+        print("Development mode \(isDevelopmentMode ? "enabled" : "disabled")")
+        #endif
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func formatCurrency(_ amount: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        return formatter.string(from: NSDecimalNumber(decimal: amount)) ?? "$\(amount)"
     }
 }
 
@@ -402,6 +504,10 @@ private struct StripeConfig: Codable {
 
 private struct ErrorResponse: Codable {
     let error: String
+}
+
+private struct CreatePaymentIntentResponse: Codable {
+    let clientSecret: String
 }
 
 // MARK: - STPAuthenticationContext

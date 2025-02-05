@@ -9,6 +9,7 @@ class TipViewModel: ObservableObject {
     @Published var tipHistory: [Tip] = []
     @Published var balance: Double = 0.0
     @Published var selectedAmount: Double?
+    @Published var showSuccessAlert = false
     
     private let db = Firestore.firestore()
     private let paymentManager = PaymentManager.shared
@@ -21,17 +22,37 @@ class TipViewModel: ObservableObject {
     
     // MARK: - Public Methods
     
-    func addFunds(_ amount: Double) async throws {
-        try await prepareTip(amount: amount)
+    @MainActor
+    func addFunds(_ amount: Double) async {
+        if PaymentManager.shared.isDevelopmentMode {
+            let decimalAmount = NSDecimalNumber(value: amount).decimalValue
+            PaymentManager.shared.addTestMoney(amount: decimalAmount)
+            let currentBalance = PaymentManager.shared.getCurrentBalance()
+            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
+        } else {
+            // In production mode, we'll handle real payments here
+            do {
+                try await prepareTip(amount: amount)
+            } catch {
+                print("Failed to add funds: \(error)")
+            }
+        }
     }
     
+    @MainActor
     func prepareTip(amount: Double) async throws {
         self.selectedAmount = amount
-        try await paymentManager.preparePayment(amount: amount)
+        let amountInCents = Int(amount * 100)
+        print("Preparing tip of $\(amount) (\(amountInCents) cents)")
+        let clientSecret = try await paymentManager.createPaymentIntent(amount: amountInCents)
+        print("Payment successful with client secret: \(clientSecret)")
         
         // If we get here, payment was successful
         if let amount = selectedAmount {
-            try await processTip(amount: amount, receiverID: "RECIPIENT_ID", videoID: "VIDEO_ID") // Replace with actual IDs
+            print("Successfully processed tip of $\(String(format: "%.2f", amount))")
+            showSuccessAlert = true
+            // Refresh balance after successful tip
+            await loadBalance()
         }
     }
     
@@ -44,16 +65,23 @@ class TipViewModel: ObservableObject {
         try await processTip(amount: 0.01, receiverID: receiverID, videoID: videoID)
     }
     
+    @MainActor
     func loadBalance() async {
-        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
-        
-        do {
-            let doc = try await db.collection("users").document(userId).getDocument()
-            if let balance = doc.data()?["balance"] as? Double {
-                self.balance = balance
+        if paymentManager.isDevelopmentMode {
+            let currentBalance = paymentManager.getCurrentBalance()
+            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
+            print("Loaded balance: $\(String(format: "%.2f", balance))")
+        } else {
+            guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
+            
+            do {
+                let doc = try await db.collection("users").document(userId).getDocument()
+                if let balance = doc.data()?["balance"] as? Double {
+                    self.balance = balance
+                }
+            } catch {
+                self.error = error
             }
-        } catch {
-            self.error = error
         }
     }
     
