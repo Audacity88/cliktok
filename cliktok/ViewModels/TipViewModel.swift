@@ -24,15 +24,16 @@ class TipViewModel: ObservableObject {
     
     @MainActor
     func addFunds(_ amount: Double) async {
-        if PaymentManager.shared.isDevelopmentMode {
+        if paymentManager.isDevelopmentMode {
             let decimalAmount = NSDecimalNumber(value: amount).decimalValue
-            PaymentManager.shared.addTestMoney(amount: decimalAmount)
-            let currentBalance = PaymentManager.shared.getCurrentBalance()
+            paymentManager.addTestMoney(amount: decimalAmount)
+            let currentBalance = paymentManager.getCurrentBalance()
             balance = NSDecimalNumber(decimal: currentBalance).doubleValue
         } else {
-            // In production mode, we'll handle real payments here
             do {
-                try await prepareTip(amount: amount)
+                let newBalance = balance + amount
+                try await updateBalance(amount: newBalance)
+                print("Successfully added $\(amount). New balance: $\(newBalance)")
             } catch {
                 print("Failed to add funds: \(error)")
             }
@@ -41,6 +42,11 @@ class TipViewModel: ObservableObject {
     
     @MainActor
     func prepareTip(amount: Double) async throws {
+        // Ensure user document exists before proceeding
+        if !paymentManager.isDevelopmentMode {
+            await loadBalance() // This will create the user document if it doesn't exist
+        }
+        
         self.selectedAmount = amount
         let amountInCents = Int(amount * 100)
         print("Preparing tip of $\(amount) (\(amountInCents) cents)")
@@ -75,13 +81,61 @@ class TipViewModel: ObservableObject {
             guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
             
             do {
-                let doc = try await db.collection("users").document(userId).getDocument()
-                if let balance = doc.data()?["balance"] as? Double {
+                let userRef = db.collection("users").document(userId)
+                let doc = try await userRef.getDocument()
+                
+                if !doc.exists {
+                    // Create user document if it doesn't exist
+                    try await userRef.setData([
+                        "balance": 0.0,
+                        "createdAt": FieldValue.serverTimestamp(),
+                        "updatedAt": FieldValue.serverTimestamp()
+                    ])
+                    self.balance = 0.0
+                } else if let balance = doc.data()?["balance"] as? Double {
                     self.balance = balance
                 }
             } catch {
+                print("Error loading balance: \(error)")
                 self.error = error
             }
+        }
+    }
+    
+    @MainActor
+    func updateBalance(amount: Double) async throws {
+        if paymentManager.isDevelopmentMode {
+            return // Balance is handled by PaymentManager in dev mode
+        }
+        
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else {
+            throw NSError(domain: "TipViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not logged in"])
+        }
+        
+        let userRef = db.collection("users").document(userId)
+        
+        do {
+            // First check if document exists
+            let doc = try await userRef.getDocument()
+            if !doc.exists {
+                // Create user document if it doesn't exist
+                try await userRef.setData([
+                    "balance": amount,
+                    "createdAt": FieldValue.serverTimestamp(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+            } else {
+                // Update existing document
+                try await userRef.updateData([
+                    "balance": amount,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+            }
+            
+            self.balance = amount
+        } catch {
+            print("Error updating balance: \(error)")
+            throw error
         }
     }
     
@@ -123,42 +177,80 @@ class TipViewModel: ObservableObject {
     
     private func processTip(amount: Double, receiverID: String, videoID: String) async throws {
         guard let senderID = AuthenticationManager.shared.currentUser?.uid else {
-            throw NSError(domain: "TipError", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid tip amount or user"])
+            throw NSError(domain: "TipViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not logged in"])
         }
         
-        let transactionID = UUID().uuidString
+        let tipId = UUID().uuidString
+        let tip = Tip(
+            id: tipId,
+            amount: amount,
+            timestamp: Date(),
+            videoID: videoID,
+            senderID: senderID,
+            receiverID: receiverID,
+            transactionID: tipId
+        )
         
-        // Record the tip in Firestore
-        let tipRef = db.collection("users").document(senderID).collection("tips").document()
-        let tip = [
-            "amount": amount,
-            "timestamp": Timestamp(),
-            "videoID": videoID,
-            "senderID": senderID,
-            "receiverID": receiverID,
-            "transactionID": transactionID
-        ] as [String : Any]
-        
-        try await tipRef.setData(tip)
-        
-        // Update recipient's balance
-        let recipientRef = db.collection("users").document(receiverID)
-        try await db.runTransaction { transaction, errorPointer in
-            let recipientDoc: DocumentSnapshot
-            do {
-                try recipientDoc = transaction.getDocument(recipientRef)
-            } catch let fetchError as NSError {
-                errorPointer?.pointee = fetchError
-                return nil
+        do {
+            // Create or get sender document
+            let senderRef = db.collection("users").document(senderID)
+            let senderDoc = try await senderRef.getDocument()
+            
+            if !senderDoc.exists {
+                try await senderRef.setData([
+                    "balance": 0.0,
+                    "createdAt": FieldValue.serverTimestamp(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
             }
             
-            let currentBalance = (recipientDoc.data()?["balance"] as? Double) ?? 0
-            transaction.updateData(["balance": currentBalance + amount], forDocument: recipientRef)
-            return nil
+            // Create or get receiver document
+            let receiverRef = db.collection("users").document(receiverID)
+            let receiverDoc = try await receiverRef.getDocument()
+            
+            if !receiverDoc.exists {
+                try await receiverRef.setData([
+                    "balance": 0.0,
+                    "createdAt": FieldValue.serverTimestamp(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+            }
+            
+            // Get current balances
+            let senderBalance = (senderDoc.data()?["balance"] as? Double) ?? 0.0
+            let receiverBalance = (receiverDoc.data()?["balance"] as? Double) ?? 0.0
+            
+            // Update balances
+            try await senderRef.updateData([
+                "balance": senderBalance - amount,
+                "updatedAt": FieldValue.serverTimestamp()
+            ])
+            
+            try await receiverRef.updateData([
+                "balance": receiverBalance + amount,
+                "updatedAt": FieldValue.serverTimestamp()
+            ])
+            
+            // Record the tip
+            try await db.collection("tips").document(tip.id).setData([
+                "senderID": tip.senderID,
+                "receiverID": tip.receiverID,
+                "videoID": tip.videoID,
+                "amount": tip.amount,
+                "timestamp": tip.timestamp,
+                "transactionID": tip.transactionID
+            ])
+            
+            // Update local tip history
+            tipHistory.append(tip)
+            
+        } catch {
+            print("Error processing tip: \(error)")
+            throw error
         }
-        
-        // Refresh the UI
-        await loadBalance()
-        await loadTipHistory()
+    }
+    
+    func sendMinimumTip(receiverID: String, videoID: String) async throws {
+        try await processTip(amount: 0.01, receiverID: receiverID, videoID: videoID)
     }
 }

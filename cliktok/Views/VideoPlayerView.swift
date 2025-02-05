@@ -12,11 +12,12 @@ struct VideoPlayerView: View {
     @State private var isMuted = false
     @State private var isLiked = false
     @State private var showControls = true
-    @State private var showTipAlert = false
     @State private var showAddFundsAlert = false
-    @State private var tipSent = false
     @State private var showError = false
     @State private var errorMessage = ""
+    @State private var totalTips = 0
+    @State private var showTipBubble = false
+    @State private var showTippedText = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -83,21 +84,76 @@ struct VideoPlayerView: View {
                         // Control buttons
                         VStack(spacing: 24) {
                             // Like/Tip Button
-                            Button(action: {
-                                if !isLiked {
-                                    showTipAlert = true
-                                }
-                            }) {
-                                VStack(spacing: 4) {
-                                    Image(systemName: isLiked ? "heart.fill" : "heart")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(isLiked ? .red : .white)
-                                        .shadow(radius: 2)
-                                    if tipSent {
+                            VStack(spacing: 20) {
+                                ZStack(alignment: .center) {
+                                    // Container for fixed positioning
+                                    VStack {
+                                        Spacer()
+                                            .frame(height: 32) // Match heart height
+                                    }
+                                    .frame(width: 100, height: 80) // Fixed container size
+                                    
+                                    // Heart button
+                                    VStack(spacing: 4) {
+                                        Button(action: {
+                                            Task {
+                                                do {
+                                                    guard let videoId = video.id else { return }
+                                                    try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
+                                                    totalTips += 1
+                                                    
+                                                    // Show both animations
+                                                    withAnimation {
+                                                        showTipBubble = true
+                                                        showTippedText = true
+                                                    }
+                                                    
+                                                    // Hide animations after delay
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                        showTipBubble = false
+                                                        showTippedText = false
+                                                    }
+                                                } catch PaymentError.insufficientFunds {
+                                                    showAddFundsAlert = true
+                                                } catch {
+                                                    showError = true
+                                                    errorMessage = error.localizedDescription
+                                                }
+                                            }
+                                        }) {
+                                            VStack(spacing: 4) {
+                                                Image(systemName: "heart\(totalTips > 0 ? ".fill" : "")")
+                                                    .resizable()
+                                                    .frame(width: 32, height: 32)
+                                                    .foregroundColor(totalTips > 0 ? .red : .white)
+                                                    .shadow(radius: 2)
+                                                
+                                                if totalTips > 0 {
+                                                    Text("\(totalTips)¢")
+                                                        .font(.system(size: 12, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                        .shadow(radius: 1)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    .offset(x: 40, y: 35)
+                                    
+                                    // Tipped text overlay
+                                    if showTippedText {
                                         Text("Tipped!")
-                                            .foregroundColor(.white)
                                             .font(.system(size: 12))
-                                            .shadow(radius: 2)
+                                            .foregroundColor(.white)
+                                            .shadow(radius: 1)
+                                            .frame(width: 100)
+                                            .offset(x: 40, y: 27)
+                                            .transition(.opacity)
+                                    }
+                                    
+                                    // Tip bubble
+                                    if showTipBubble {
+                                        TipBubbleView()
+                                            .offset(x: 60, y: -30)
                                     }
                                 }
                             }
@@ -110,6 +166,7 @@ struct VideoPlayerView: View {
                                     .foregroundColor(.white)
                                     .shadow(radius: 2)
                             }
+                            .offset(x: 40, y: 10) 
                             
                             // View Count
                             VStack(spacing: 4) {
@@ -122,6 +179,7 @@ struct VideoPlayerView: View {
                                     .font(.system(size: 14))
                                     .shadow(radius: 2)
                             }
+                            .offset(x: 40, y: 10) 
                         }
                         .padding(.trailing)
                     }
@@ -130,39 +188,7 @@ struct VideoPlayerView: View {
                 }
             }
         }
-        .alert("Send Tip", isPresented: $showTipAlert) {
-            Button("Cancel", role: .cancel) { }
-            Button("Send $0.01") {
-                Task {
-                    do {
-                        guard let videoID = video.id else { return }
-                        try await tipViewModel.sendTip(to: video.userID, for: videoID)
-                        isLiked = true
-                        tipSent = true
-                        
-                        // Trigger tip animation
-                        withAnimation(.spring()) {
-                            tipSent = true
-                        }
-                        // Reset tip sent status after animation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                            tipSent = false
-                        }
-                    } catch let error as NSError {
-                        if error.code == 402 {
-                            showAddFundsAlert = true
-                        } else {
-                            showError = true
-                            errorMessage = error.localizedDescription
-                        }
-                    }
-                }
-            }
-        } message: {
-            Text("Send a $0.01 tip to the creator?")
-        }
         .alert("Insufficient Balance", isPresented: $showAddFundsAlert) {
-            Button("Cancel", role: .cancel) { }
             Button("Add Funds") {
                 Task {
                     do {
@@ -174,6 +200,7 @@ struct VideoPlayerView: View {
                     }
                 }
             }
+            Button("Cancel", role: .cancel) { }
         } message: {
             Text("Your balance is too low. Would you like to add more funds?")
         }
