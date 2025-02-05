@@ -12,6 +12,7 @@ import FirebaseAuth
 struct ContentView: View {
     @StateObject private var authManager = AuthenticationManager()
     @StateObject private var feedViewModel = VideoFeedViewModel()
+    @EnvironmentObject private var productsManager: ProductsManager
     @State private var showingTestData = false
     @State private var showingVideoUpload = false
     @State private var selectedTab = 0
@@ -61,6 +62,7 @@ struct ContentView: View {
                 
                 NavigationStack {
                     WalletView()
+                        .environmentObject(productsManager)
                 }
                 .tabItem {
                     Image(systemName: "creditcard.fill")

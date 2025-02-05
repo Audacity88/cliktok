@@ -1,0 +1,47 @@
+{
+  "identifier" : "com.cliktok.iap",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "0.99",
+      "familyShareable" : false,
+      "internalID" : "com.cliktok.coins.1",
+      "localizations" : [
+        {
+          "description" : "Add $1.00 to your wallet",
+          "displayName" : "$1.00 Coins",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.cliktok.coins.1",
+      "referenceName" : "1 Dollar Coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "com.cliktok.coins.5",
+      "localizations" : [
+        {
+          "description" : "Add $5.00 to your wallet",
+          "displayName" : "$5.00 Coins",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.cliktok.coins.5",
+      "referenceName" : "5 Dollar Coins",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "com.cliktok",
+    "_developerTeamID" : "YOURTEAMID",
+    "_lastSynchronizedDate" : 719161957.89432895,
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [],
+  "version" : {
+    "major" : 2,
+    "minor" : 0
+  }
+}

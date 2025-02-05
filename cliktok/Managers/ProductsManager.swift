@@ -12,8 +12,8 @@ class ProductsManager: ObservableObject {
     @Published private(set) var lastError: String?
     
     private let productIdentifiers = Set([
-        "coins.1",
-        "coins.5"
+        "com.cliktok.coins.1",
+        "com.cliktok.coins.5"
     ])
     
     private let logger = Logger(subsystem: "com.cliktok", category: "ProductsManager")
@@ -182,4 +182,4 @@ class ProductsManager: ObservableObject {
             self.logger.error("Manual reload failed: \(error.localizedDescription)")
         }
     }
-} 
+}

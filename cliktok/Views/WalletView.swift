@@ -73,6 +73,7 @@ private struct TipHistoryRowView: View {
 
 struct WalletView: View {
     @StateObject private var tipViewModel = TipViewModel()
+    @EnvironmentObject private var productsManager: ProductsManager
     @State private var showError = false
     @State private var errorMessage = ""
     
@@ -95,7 +96,7 @@ struct WalletView: View {
             
             // Add Funds Section
             Section {
-                if ProductsManager.shared.isLoading {
+                if productsManager.isLoading {
                     HStack {
                         Spacer()
                         ProgressView()
@@ -103,13 +104,36 @@ struct WalletView: View {
                         Spacer()
                     }
                     .listRowBackground(Color.clear)
-                } else if tipViewModel.products.isEmpty {
-                    Text("No products available")
-                        .foregroundColor(.gray)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowBackground(Color.clear)
+                } else if productsManager.products.isEmpty {
+                    VStack(spacing: 10) {
+                        Text("No products available")
+                            .foregroundColor(.gray)
+                        
+                        if let error = productsManager.lastError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .multilineTextAlignment(.center)
+                        }
+                        
+                        Button(action: {
+                            Task {
+                                do {
+                                    try await productsManager.loadProducts()
+                                } catch {
+                                    showError = true
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }) {
+                            Label("Reload Products", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .listRowBackground(Color.clear)
                 } else {
-                    ForEach(tipViewModel.products, id: \.id) { product in
+                    ForEach(productsManager.products, id: \.id) { product in
                         ProductRowView(
                             product: product,
                             isPurchasing: tipViewModel.isPurchasing,
@@ -151,9 +175,14 @@ struct WalletView: View {
         .scrollContentBackground(.hidden)
         .refreshable {
             Task {
-                await ProductsManager.shared.loadProducts()
-                await tipViewModel.loadBalance()
-                await tipViewModel.loadTipHistory()
+                do {
+                    try await productsManager.loadProducts()
+                    await tipViewModel.loadBalance()
+                    await tipViewModel.loadTipHistory()
+                } catch {
+                    showError = true
+                    errorMessage = error.localizedDescription
+                }
             }
         }
         .alert("Error", isPresented: $showError) {
@@ -162,9 +191,14 @@ struct WalletView: View {
             Text(errorMessage)
         }
         .task {
-            await ProductsManager.shared.loadProducts()
-            await tipViewModel.loadBalance()
-            await tipViewModel.loadTipHistory()
+            do {
+                try await productsManager.loadProducts()
+                await tipViewModel.loadBalance()
+                await tipViewModel.loadTipHistory()
+            } catch {
+                showError = true
+                errorMessage = error.localizedDescription
+            }
         }
     }
 } 
