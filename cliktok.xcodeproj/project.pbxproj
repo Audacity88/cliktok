@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		372CDB8C2D531596006F7CDB /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 372CDB8B2D531596006F7CDB /* FirebaseFirestore */; };
 		372CDB8E2D531596006F7CDB /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 372CDB8D2D531596006F7CDB /* FirebaseStorage */; };
+		37A390432D5414240023EAF1 /* Alamofire in Frameworks */ = {isa = PBXBuildFile; productRef = 37A390422D5414240023EAF1 /* Alamofire */; };
 		37A531CB2D53044C00633396 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 37A531CA2D53044C00633396 /* FirebaseAuth */; };
 		37A531CD2D53044C00633396 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 37A531CC2D53044C00633396 /* FirebaseCore */; };
 		37D3E4C72D54002C00E579B5 /* Stripe in Frameworks */ = {isa = PBXBuildFile; productRef = 37D3E4C62D54002C00E579B5 /* Stripe */; };
@@ -34,6 +35,7 @@
 				37D3E4C72D54002C00E579B5 /* Stripe in Frameworks */,
 				37A531CD2D53044C00633396 /* FirebaseCore in Frameworks */,
 				372CDB8E2D531596006F7CDB /* FirebaseStorage in Frameworks */,
+				37A390432D5414240023EAF1 /* Alamofire in Frameworks */,
 				37A531CB2D53044C00633396 /* FirebaseAuth in Frameworks */,
 				372CDB8C2D531596006F7CDB /* FirebaseFirestore in Frameworks */,
 			);
@@ -83,6 +85,7 @@
 				372CDB8B2D531596006F7CDB /* FirebaseFirestore */,
 				372CDB8D2D531596006F7CDB /* FirebaseStorage */,
 				37D3E4C62D54002C00E579B5 /* Stripe */,
+				37A390422D5414240023EAF1 /* Alamofire */,
 			);
 			productName = cliktok;
 			productReference = 37E27EB82D53030100FDBE70 /* cliktok.app */;
@@ -115,6 +118,7 @@
 			packageReferences = (
 				37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				37D3E4C52D54002C00E579B5 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */,
+				37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 37E27EB92D53030100FDBE70 /* Products */;
@@ -350,6 +354,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Alamofire/Alamofire.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.10.2;
+			};
+		};
 		37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -378,6 +390,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		37A390422D5414240023EAF1 /* Alamofire */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */;
+			productName = Alamofire;
 		};
 		37A531CA2D53044C00633396 /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
