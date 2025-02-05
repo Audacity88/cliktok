@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import SwiftData
 import FirebaseCore
 
 class AppDelegate: NSObject, UIApplicationDelegate {
@@ -25,6 +24,5 @@ struct cliktokApp: App {
         WindowGroup {
             ContentView()
         }
-        .modelContainer(for: Item.self)
     }
 }

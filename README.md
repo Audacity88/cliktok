@@ -1,4 +1,4 @@
-# CliktTok
+# ClikTok
 
 A SwiftUI iOS app with Firebase authentication.
 

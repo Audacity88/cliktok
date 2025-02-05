@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseAuth
+import AuthenticationServices
 
 struct LoginView: View {
     @StateObject private var authManager = AuthenticationManager()
@@ -12,18 +13,22 @@ struct LoginView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 20) {
-                Text("Welcome to CliktTok")
+                Text("Welcome to ClikTok")
                     .font(.largeTitle)
                     .fontWeight(.bold)
                 
                 TextField("Email", text: $email)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .autocapitalization(.none)
-                    .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .textContentType(isSignUp ? .username : .emailAddress)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
                 
                 SecureField("Password", text: $password)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .textContentType(isSignUp ? .newPassword : .password)
+                    .submitLabel(.done)
                 
                 Button(action: {
                     Task {
