@@ -23,4 +23,24 @@ struct Video: Identifiable, Codable {
         case likes
         case views
     }
+    
+    init(id: String? = nil,
+         userID: String,
+         videoURL: String,
+         thumbnailURL: String? = nil,
+         caption: String,
+         hashtags: [String],
+         createdAt: Date = Date(),
+         likes: Int = 0,
+         views: Int = 0) {
+        self.id = id
+        self.userID = userID
+        self.videoURL = videoURL
+        self.thumbnailURL = thumbnailURL
+        self.caption = caption
+        self.hashtags = hashtags
+        self.createdAt = createdAt
+        self.likes = likes
+        self.views = views
+    }
 } 

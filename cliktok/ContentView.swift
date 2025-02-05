@@ -11,6 +11,7 @@ import FirebaseAuth
 
 struct ContentView: View {
     @StateObject private var authManager = AuthenticationManager()
+    @State private var showingTestData = false
     
     var body: some View {
         NavigationView {
@@ -26,6 +27,18 @@ struct ContentView: View {
                                     .foregroundColor(.white)
                             }
                         }
+                        
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button(action: {
+                                showingTestData = true
+                            }) {
+                                Image(systemName: "plus.circle")
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    }
+                    .sheet(isPresented: $showingTestData) {
+                        TestDataView()
                     }
             } else {
                 LoginView()

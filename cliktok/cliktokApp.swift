@@ -7,11 +7,16 @@
 
 import SwiftUI
 import FirebaseCore
+import OSLog
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    private let logger = Logger(subsystem: "com.cliktok", category: "AppDelegate")
+    
     func application(_ application: UIApplication,
                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        FirebaseApp.configure()
+        logger.debug("Configuring Firebase...")
+        FirebaseConfig.configure()
+        logger.debug("Firebase configuration completed")
         return true
     }
 }
