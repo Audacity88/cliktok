@@ -18,11 +18,20 @@ struct VideoFeedView: View {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
                             VideoPlayerView(video: video)
                                 .frame(width: geometry.size.width, height: geometry.size.height)
+                                .rotationEffect(.degrees(-90))
                                 .tag(index)
                         }
                     }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                    .frame(
+                        width: geometry.size.height,
+                        height: geometry.size.width
+                    )
+                    .rotationEffect(.degrees(90), anchor: .topLeading)
+                    .offset(
+                        x: geometry.size.width,
+                        y: -geometry.size.height/2 + geometry.size.width/2
+                    )
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea()
                 }
                 
@@ -37,10 +46,6 @@ struct VideoFeedView: View {
                 }
             }
         }
-        .onAppear {
-            // Configure for vertical scrolling
-            configureVerticalScrolling()
-        }
         .onChange(of: currentIndex) { newIndex in
             // Load more videos if we're near the end
             if newIndex >= viewModel.videos.count - 2 {
@@ -52,57 +57,6 @@ struct VideoFeedView: View {
         .task {
             await viewModel.loadInitialVideos()
         }
-    }
-    
-    private func configureVerticalScrolling() {
-        // Configure TabView for vertical scrolling
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
-            
-            // Hide tab bar
-            UITabBar.appearance().isHidden = true
-            
-            // Find and configure collection views
-            let collectionViews = findCollectionView(in: window)
-            for collectionView in collectionViews {
-                // Force vertical scrolling
-                if let layout = collectionView.collectionViewLayout as? UICollectionViewFlowLayout {
-                    layout.scrollDirection = .vertical
-                }
-                
-                // Configure scrolling behavior
-                collectionView.isPagingEnabled = true
-                collectionView.showsVerticalScrollIndicator = false
-                collectionView.showsHorizontalScrollIndicator = false
-                collectionView.alwaysBounceVertical = true
-                collectionView.alwaysBounceHorizontal = false
-                collectionView.bounces = false
-                
-                // Adjust content insets
-                collectionView.contentInsetAdjustmentBehavior = .never
-                collectionView.verticalScrollIndicatorInsets = .zero
-                
-                // Set scroll view delegate to handle paging
-                if let scrollView = collectionView as? UIScrollView {
-                    scrollView.delegate = nil // Remove any existing delegate
-                    scrollView.decelerationRate = .fast
-                }
-            }
-        }
-    }
-    
-    private func findCollectionView(in view: UIView) -> [UICollectionView] {
-        var collectionViews = [UICollectionView]()
-        
-        if let collectionView = view as? UICollectionView {
-            collectionViews.append(collectionView)
-        }
-        
-        for subview in view.subviews {
-            collectionViews.append(contentsOf: findCollectionView(in: subview))
-        }
-        
-        return collectionViews
     }
 }
 

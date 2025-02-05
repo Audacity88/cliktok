@@ -10,6 +10,7 @@ struct VideoPlayerView: View {
     @State private var isPlaying = false
     @State private var isMuted = false
     @State private var isLiked = false
+    @State private var showControls = true
     
     var body: some View {
         GeometryReader { geometry in
@@ -21,12 +22,14 @@ struct VideoPlayerView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .onAppear {
                             player.play()
+                            isPlaying = true
                             Task {
                                 await viewModel.updateVideoStats(video: video, viewed: true)
                             }
                         }
                         .onDisappear {
                             player.pause()
+                            isPlaying = false
                         }
                 } else {
                     // Show thumbnail or loading placeholder
@@ -45,84 +48,97 @@ struct VideoPlayerView: View {
                     }
                 }
                 
-                // Center Play/Pause Button
-                Button(action: togglePlayback) {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .foregroundColor(.white.opacity(0.8))
-                        .font(.system(size: 72))
-                        .shadow(radius: 4)
-                }
-                .opacity(isPlaying ? 0 : 1) // Hide when playing
-                
-                // Controls Layer
+                // Overlay Controls
                 VStack {
-                    Spacer()
+                    // Top spacer to make the tap area larger
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation {
+                                showControls.toggle()
+                            }
+                        }
                     
-                    // Video info
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(video.caption)
-                                .foregroundColor(.white)
-                                .font(.system(size: 16, weight: .semibold))
-                                .shadow(radius: 2)
-                            
-                            // Hashtags
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack {
-                                    ForEach(video.hashtags, id: \.self) { hashtag in
-                                        Text("#\(hashtag)")
-                                            .foregroundColor(.white)
-                                            .font(.system(size: 14))
-                                            .shadow(radius: 2)
+                    // Center Play/Pause Button
+                    if !isPlaying || showControls {
+                        Button(action: togglePlayback) {
+                            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                .foregroundColor(.white.opacity(0.8))
+                                .font(.system(size: 72))
+                                .shadow(radius: 4)
+                        }
+                    }
+                    
+                    // Bottom spacer and controls
+                    VStack {
+                        Spacer()
+                        
+                        // Video info and controls
+                        HStack(alignment: .bottom) {
+                            // Left side - Caption and hashtags
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(video.caption)
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .shadow(radius: 2)
+                                
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack {
+                                        ForEach(video.hashtags, id: \.self) { hashtag in
+                                            Text("#\(hashtag)")
+                                                .foregroundColor(.white)
+                                                .font(.system(size: 14))
+                                                .shadow(radius: 2)
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Spacer()
-                        
-                        // Controls and stats
-                        VStack(spacing: 12) {
-                            // Mute/Unmute button
-                            Button(action: toggleMute) {
-                                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 28))
-                                    .shadow(radius: 2)
-                            }
                             
-                            // Like button
-                            Button(action: toggleLike) {
-                                Image(systemName: isLiked ? "heart.fill" : "heart")
-                                    .foregroundColor(isLiked ? .red : .white)
-                                    .font(.system(size: 28))
-                                    .shadow(radius: 2)
-                            }
-                            Text("\(video.likes)")
-                                .foregroundColor(.white)
-                                .font(.system(size: 14))
-                                .shadow(radius: 2)
+                            Spacer()
                             
-                            // View count
-                            VStack(spacing: 4) {
-                                Image(systemName: "eye.fill")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 28))
-                                    .shadow(radius: 2)
-                                Text("\(video.views)")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 14))
-                                    .shadow(radius: 2)
+                            // Right side - Controls
+                            VStack(spacing: 20) {
+                                // Mute button
+                                Button(action: toggleMute) {
+                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 28))
+                                        .shadow(radius: 2)
+                                }
+                                
+                                // Like button and count
+                                VStack(spacing: 4) {
+                                    Button(action: toggleLike) {
+                                        Image(systemName: isLiked ? "heart.fill" : "heart")
+                                            .foregroundColor(isLiked ? .red : .white)
+                                            .font(.system(size: 28))
+                                            .shadow(radius: 2)
+                                    }
+                                    Text("\(video.likes)")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 14))
+                                        .shadow(radius: 2)
+                                }
+                                
+                                // View count
+                                VStack(spacing: 4) {
+                                    Image(systemName: "eye.fill")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 28))
+                                        .shadow(radius: 2)
+                                    Text("\(video.views)")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 14))
+                                        .shadow(radius: 2)
+                                }
                             }
+                            .padding(.trailing)
                         }
-                        .padding(.trailing)
+                        .padding(.bottom, 30)
+                        .padding(.horizontal)
                     }
-                    .padding(.bottom, 30)
-                    .padding(.horizontal)
                 }
-            }
-            .contentShape(Rectangle()) // Make the entire view tappable
-            .onTapGesture {
-                togglePlayback()
             }
         }
         .onAppear {
