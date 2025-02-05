@@ -127,10 +127,10 @@ class VideoUploadViewModel: ObservableObject {
         let asset = AVURLAsset(url: videoURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
-        imageGenerator.maximumSize = CGSize(width: 1280, height: 720) // HD size is sufficient for thumbnails
+        imageGenerator.maximumSize = CGSize(width: 1280, height: 720)
         
-        // Generate thumbnail from first frame
-        let time = CMTime(seconds: 0, preferredTimescale: 600)
+        // Get thumbnail from first frame
+        let time = CMTime(value: 0, timescale: 1)
         let cgImage = try await imageGenerator.image(at: time).image
         
         // Convert to UIImage and compress

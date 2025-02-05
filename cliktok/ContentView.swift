@@ -11,6 +11,7 @@ import FirebaseAuth
 
 struct ContentView: View {
     @StateObject private var authManager = AuthenticationManager()
+    @StateObject private var feedViewModel = VideoFeedViewModel()
     @State private var showingTestData = false
     @State private var showingVideoUpload = false
     
@@ -49,10 +50,13 @@ struct ContentView: View {
                     }
                     .sheet(isPresented: $showingTestData) {
                         TestDataView()
+                            .environmentObject(feedViewModel)
                     }
                     .sheet(isPresented: $showingVideoUpload) {
                         VideoUploadView()
+                            .environmentObject(feedViewModel)
                     }
+                    .environmentObject(feedViewModel)
             } else {
                 LoginView()
             }
