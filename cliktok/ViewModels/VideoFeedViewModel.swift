@@ -56,7 +56,25 @@ class VideoFeedViewModel: ObservableObject {
         }
     }
     
-    func handleSwipe(video: Video, direction: SwipeDirection) {
-        // Will implement swipe logic later
+    func updateVideoStats(video: Video, liked: Bool? = nil, viewed: Bool = true) async {
+        guard let id = video.id else { return }
+        
+        do {
+            var updates: [String: Any] = [:]
+            
+            if viewed {
+                updates["views"] = FieldValue.increment(Int64(1))
+            }
+            
+            if let liked = liked {
+                updates["likes"] = FieldValue.increment(Int64(liked ? 1 : -1))
+            }
+            
+            if !updates.isEmpty {
+                try await db.collection("videos").document(id).updateData(updates)
+            }
+        } catch {
+            print("Error updating video stats: \(error.localizedDescription)")
+        }
     }
 } 
