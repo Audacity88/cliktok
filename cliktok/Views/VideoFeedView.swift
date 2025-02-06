@@ -2,7 +2,7 @@ import SwiftUI
 
 #if os(iOS)
 struct VideoFeedView: View {
-    @StateObject private var viewModel = VideoFeedViewModel()
+    @EnvironmentObject private var viewModel: VideoFeedViewModel
     @State private var currentIndex = 0
     @Binding var scrollToTop: Bool
     
@@ -16,14 +16,14 @@ struct VideoFeedView: View {
                 Color.black.edgesIgnoringSafeArea(.all)
                 
                 if viewModel.videos.isEmpty {
-                    ProgressView()
-                        .tint(.white)
+                    LoadingView()
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
                             VideoPlayerView(video: video, showBackButton: false) { _ in
                                 prefetchVideos(currentIndex: index)
                             }
+                            .environmentObject(viewModel)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .rotationEffect(.degrees(-90))
                             .tag(index)
@@ -36,54 +36,45 @@ struct VideoFeedView: View {
                     .rotationEffect(.degrees(90), anchor: .topLeading)
                     .offset(
                         x: geometry.size.width,
-                        y: -geometry.size.height/2 + geometry.size.width/2
+                        y: geometry.size.width/2 - geometry.size.height/2
                     )
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea()
                 }
-                
-                // Loading indicator for more videos
-                if viewModel.isLoading {
-                    VStack {
-                        Spacer()
-                        ProgressView()
-                            .tint(.white)
-                            .padding(.bottom, 20)
+            }
+            .onChange(of: currentIndex) { oldValue, newValue in
+                if newValue == viewModel.videos.count - 2 {
+                    Task {
+                        await viewModel.loadMoreVideos()
                     }
                 }
             }
-        }
-        .onChange(of: currentIndex) { oldValue, newValue in
-            prefetchVideos(currentIndex: newValue)
-            
-            // Load more videos if we're near the end
-            if newValue >= viewModel.videos.count - 2 {
-                Task {
-                    await viewModel.loadMoreVideos()
-                }
-            }
-        }
-        .onChange(of: scrollToTop) { oldValue, newValue in
-            if newValue {
-                Task {
-                    // Refresh feed and scroll to top
-                    await viewModel.loadInitialVideos()
-                    currentIndex = 0
-                    
-                    // Start prefetching for the first few videos
-                    if !viewModel.videos.isEmpty {
-                        prefetchVideos(currentIndex: 0)
+            .onChange(of: scrollToTop) { oldValue, newValue in
+                if newValue {
+                    withAnimation {
+                        currentIndex = 0
                     }
-                    
-                    // Reset the flag
                     scrollToTop = false
                 }
             }
-        }
-        .task {
-            await viewModel.loadInitialVideos()
-            if !viewModel.videos.isEmpty {
-                prefetchVideos(currentIndex: 0)
+            .onChange(of: viewModel.videos.count) { oldValue, newValue in
+                if oldValue > newValue {
+                    // Video was deleted
+                    withAnimation {
+                        // If we're at the end, move back one
+                        if currentIndex >= newValue {
+                            currentIndex = max(0, newValue - 1)
+                        }
+                    }
+                } else if oldValue == 0 && newValue > 0 {
+                    // Initial load of videos
+                    currentIndex = 0
+                }
+            }
+            .task {
+                if viewModel.videos.isEmpty {
+                    await viewModel.loadInitialVideos()
+                }
             }
         }
     }

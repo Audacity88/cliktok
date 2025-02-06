@@ -11,10 +11,10 @@ import FirebaseAuth
 
 struct ContentView: View {
     @StateObject private var feedViewModel = VideoFeedViewModel()
-    @State private var showingTestData = false
     @State private var showingVideoUpload = false
     @State private var selectedTab = 0
     @State private var scrollToTop = false
+    @State private var isLoading = true
     
     // Use the shared instance as a StateObject to observe changes
     @StateObject private var authManager = AuthenticationManager.shared
@@ -29,76 +29,76 @@ struct ContentView: View {
     }
     
     var body: some View {
-        if authManager.isAuthenticated {
-            TabView(selection: $selectedTab) {
-                NavigationStack {
-                    VideoFeedView(scrollToTop: $scrollToTop)
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbarBackground(.visible, for: .navigationBar)
-                        .toolbarBackground(Color.black, for: .navigationBar)
-                        .navigationBarItems(
-                            trailing: Button(action: {
-                                showingTestData = true
-                            }) {
-                                Image(systemName: "plus.circle")
-                                    .foregroundColor(.white)
-                            }
-                        )
+        Group {
+            if isLoading {
+                LoadingView()
+            } else if authManager.isAuthenticated {
+                TabView(selection: $selectedTab) {
+                    NavigationStack {
+                        VideoFeedView(scrollToTop: $scrollToTop)
+                            .environmentObject(feedViewModel)
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbarBackground(.visible, for: .navigationBar)
+                            .toolbarBackground(Color.black, for: .navigationBar)
+                    }
+                    .tabItem {
+                        Image(systemName: "house.fill")
+                        Text("Home")
+                    }
+                    .tag(0)
+                    
+                    NavigationStack {
+                        WalletView()
+                    }
+                    .tabItem {
+                        Image(systemName: "dollarsign.circle.fill")
+                        Text("Wallet")
+                    }
+                    .tag(1)
+                    
+                    Button(action: {
+                        showingVideoUpload = true
+                    }) {
+                        Image(systemName: "plus.square.fill")
+                            .font(.system(size: 24))
+                    }
+                    .tabItem {
+                        Image(systemName: "plus.square.fill")
+                        Text("Upload")
+                    }
+                    .tag(2)
+                    
+                    NavigationStack {
+                        ProfileView()
+                            .environmentObject(feedViewModel)
+                    }
+                    .tabItem {
+                        Image(systemName: "person.fill")
+                        Text("Profile")
+                    }
+                    .tag(3)
                 }
-                .tabItem {
-                    Image(systemName: "house.fill")
-                    Text("Home")
+                .onChange(of: selectedTab) { oldValue, newValue in
+                    // Update tab bar appearance based on selected tab
+                    let tabBarAppearance = newValue == 1 ? lightAppearance : darkAppearance
+                    UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
+                    UITabBar.appearance().standardAppearance = tabBarAppearance
                 }
-                .tag(0)
-                
-                NavigationStack {
-                    WalletView()
+                .sheet(isPresented: $showingVideoUpload) {
+                    VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
+                        switchToTab(0)  // Switch to home tab
+                        scrollToTop = true  // Trigger scroll to top
+                    })
+                    .environmentObject(feedViewModel)
                 }
-                .tabItem {
-                    Image(systemName: "dollarsign.circle.fill")
-                    Text("Wallet")
-                }
-                .tag(1)
-                
-                Button(action: {
-                    showingVideoUpload = true
-                }) {
-                    Image(systemName: "plus.square.fill")
-                        .font(.system(size: 24))
-                }
-                .tabItem {
-                    Image(systemName: "plus.square.fill")
-                    Text("Upload")
-                }
-                .tag(2)
-                
-                NavigationStack {
-                    ProfileView()
-                }
-                .tabItem {
-                    Image(systemName: "person.fill")
-                    Text("Profile")
-                }
-                .tag(3)
+            } else {
+                LoginView()
             }
-            .onChange(of: selectedTab) { oldValue, newValue in
-                // Update tab bar appearance based on selected tab
-                let tabBarAppearance = newValue == 1 ? lightAppearance : darkAppearance
-                UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
-                UITabBar.appearance().standardAppearance = tabBarAppearance
-            }
-            .sheet(isPresented: $showingTestData) {
-                TestDataView()
-            }
-            .sheet(isPresented: $showingVideoUpload) {
-                VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
-                    switchToTab(0)  // Switch to home tab
-                    scrollToTop = true  // Trigger scroll to top
-                })
-                .environmentObject(feedViewModel)
-            }
-        } else {
-            LoginView()
+        }
+        .task {
+            // Add a small delay to prevent flash of login screen
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            isLoading = false
         }
     }
     

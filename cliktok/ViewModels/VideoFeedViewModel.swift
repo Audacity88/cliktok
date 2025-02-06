@@ -99,9 +99,29 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func getCreator(for video: Video) -> User? {
-        let creator = videoCreators[video.userID]
-        print("Getting creator for video \(video.id): \(creator?.displayName ?? "not found")")
-        return creator
+        return videoCreators[video.userID]
+    }
+    
+    @MainActor
+    func deleteVideo(_ video: Video) async throws {
+        guard let videoId = video.id else { 
+            throw NSError(domain: "VideoFeed", code: 400, userInfo: [NSLocalizedDescriptionKey: "Video ID not found"]) 
+        }
+        
+        isLoading = true
+        do {
+            // Delete from Firestore
+            try await db.collection("videos").document(videoId).delete()
+            
+            // Remove from local array
+            if let index = videos.firstIndex(where: { $0.id == videoId }) {
+                videos.remove(at: index)
+            }
+            isLoading = false
+        } catch {
+            isLoading = false
+            throw error
+        }
     }
     
     func updateVideoStats(video: Video, liked: Bool? = nil, viewed: Bool = true) async {

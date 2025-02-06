@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 import AVFoundation
 import FirebaseFirestore
+import FirebaseAuth
 
 #if os(iOS)
 
@@ -102,7 +103,7 @@ actor VideoAssetLoader {
 }
 
 struct VideoPlayerView: View {
-    @StateObject private var viewModel = VideoFeedViewModel()
+    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     @StateObject private var tipViewModel = TipViewModel.shared
     @Environment(\.dismiss) private var dismiss
     let video: Video
@@ -122,6 +123,8 @@ struct VideoPlayerView: View {
     @State private var isPlaying = true
     @State private var showPlayButton = false
     @State private var timeObserverToken: Any?
+    @State private var showDeleteAlert = false
+    @State private var creator: User?
     let onPrefetch: (([Video]) -> Void)?
     
     init(video: Video, showBackButton: Bool, onPrefetch: (([Video]) -> Void)? = nil) {
@@ -181,7 +184,44 @@ struct VideoPlayerView: View {
                                     .background(Circle().fill(Color.black.opacity(0.5)))
                             }
                             .padding(.leading)
+                            
                             Spacer()
+                            
+                            // Add three-dot menu if user owns the video
+                            if video.userID == Auth.auth().currentUser?.uid {
+                                Menu {
+                                    Button(role: .destructive) {
+                                        showDeleteAlert = true
+                                    } label: {
+                                        Label("Delete Video", systemImage: "trash")
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                }
+                                .padding(.trailing)
+                            }
+                        }
+                        .padding(.top, 50)
+                    } else if video.userID == Auth.auth().currentUser?.uid {
+                        // Show delete menu even when back button is hidden
+                        HStack {
+                            Spacer()
+                            Menu {
+                                Button(role: .destructive) {
+                                    showDeleteAlert = true
+                                } label: {
+                                    Label("Delete Video", systemImage: "trash")
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .shadow(radius: 2)
+                            }
+                            .padding(.trailing)
                         }
                         .padding(.top, 50)
                     }
@@ -209,7 +249,7 @@ struct VideoPlayerView: View {
                                         .shadow(radius: 2)
                                 }
                                 
-                                if let creator = viewModel.getCreator(for: video) {
+                                if let creator = creator {
                                     HStack(alignment: .center, spacing: 10) {
                                         NavigationLink(destination: ProfileView(userId: video.userID)) {
                                             ProfileImageView(imageURL: creator.profileImageURL, size: 40)
@@ -234,7 +274,7 @@ struct VideoPlayerView: View {
                             Spacer()
                             
                             // Control buttons
-                            VStack(spacing: 24) {
+                            VStack(spacing: 20) {
                                 // Like/Tip Button
                                 VStack(spacing: 20) {
                                     ZStack(alignment: .center) {
@@ -346,7 +386,11 @@ struct VideoPlayerView: View {
                 print("VideoPlayerView appeared for video: \(video.id)")
                 Task {
                     await loadAndPlayVideo()
-                    await viewModel.fetchCreators(for: [video])
+                    // Fetch creator once and store in state
+                    if creator == nil {
+                        await feedViewModel.fetchCreators(for: [video])
+                        creator = feedViewModel.getCreator(for: video)
+                    }
                     await tipViewModel.loadBalance()
                     await tipViewModel.loadTipHistory()
                 }
@@ -366,6 +410,23 @@ struct VideoPlayerView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(errorMessage)
+            }
+            .alert("Delete Video", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) {
+                    Task {
+                        do {
+                            try await feedViewModel.deleteVideo(video)
+                            cleanupPlayer()
+                            dismiss()
+                        } catch {
+                            errorMessage = error.localizedDescription
+                            showError = true
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Are you sure you want to delete this video? This action cannot be undone.")
             }
             .sheet(isPresented: $showWallet) {
                 WalletView()

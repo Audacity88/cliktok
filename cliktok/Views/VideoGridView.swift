@@ -5,6 +5,7 @@ struct VideoGridView: View {
     let videos: [Video]
     let showBackButton: Bool
     @State private var selectedVideo: Video?
+    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
     private let columns = [
         GridItem(.flexible(), spacing: 1),
@@ -26,6 +27,7 @@ struct VideoGridView: View {
         }
         .fullScreenCover(item: $selectedVideo) { video in
             VideoPlayerView(video: video, showBackButton: showBackButton)
+                .environmentObject(feedViewModel)
                 .edgesIgnoringSafeArea(.all)
         }
     }

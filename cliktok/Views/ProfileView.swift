@@ -85,6 +85,7 @@ struct ProfileContentView: View {
     @Binding var selectedItem: PhotosPickerItem?
     @Binding var selectedImageData: Data?
     @ObservedObject var viewModel: UserViewModel
+    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
     var body: some View {
         ScrollView {
@@ -119,6 +120,7 @@ struct ProfileContentView: View {
                 // User's Videos Grid
                 if !viewModel.userVideos.isEmpty {
                     VideoGridView(videos: viewModel.userVideos, showBackButton: true)
+                        .environmentObject(feedViewModel)
                 } else {
                     Text("No videos yet")
                         .foregroundColor(.gray)
