@@ -21,6 +21,7 @@ struct VideoPlayerView: View {
     @State private var showTipBubble = false
     @State private var showTippedText = false
     @State private var showTipSheet = false
+    @State private var isLoadingVideo = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -29,6 +30,13 @@ struct VideoPlayerView: View {
                     VideoPlayer(player: player)
                         .edgesIgnoringSafeArea(.all)
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                } else if isLoadingVideo {
+                    Color.black
+                        .edgesIgnoringSafeArea(.all)
+                        .overlay(
+                            ProgressView()
+                                .tint(.white)
+                        )
                 } else {
                     Color.black
                         .edgesIgnoringSafeArea(.all)
@@ -212,8 +220,8 @@ struct VideoPlayerView: View {
             .edgesIgnoringSafeArea(.all)
             .onAppear {
                 print("VideoPlayerView appeared for video: \(video.id)")
-                loadAndPlayVideo()
                 Task {
+                    await loadAndPlayVideo()
                     await viewModel.fetchCreators(for: [video])
                     await tipViewModel.loadBalance()
                     await tipViewModel.loadTipHistory()
@@ -241,7 +249,7 @@ struct VideoPlayerView: View {
         }
     }
     
-    private func loadAndPlayVideo() {
+    private func loadAndPlayVideo() async {
         guard let url = URL(string: video.videoURL) else {
             print("Invalid URL for video: \(video.id)")
             return
@@ -249,40 +257,71 @@ struct VideoPlayerView: View {
         
         print("Loading video from URL: \(url)")
         
-        // Create new player
-        let newPlayer = AVPlayer(url: url)
-        newPlayer.isMuted = isMuted
-        
-        // Configure looping
-        NotificationCenter.default.removeObserver(self)
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: newPlayer.currentItem,
-            queue: .main
-        ) { [weak newPlayer] _ in
-            // print("Video finished playing, looping: \(video.id)")
-            newPlayer?.seek(to: .zero)
-            newPlayer?.play()
+        await MainActor.run {
+            isLoadingVideo = true
         }
         
-        // Set up error observation
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: newPlayer.currentItem,
-            queue: .main
-        ) { notification in
-            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                print("Error playing video: \(error.localizedDescription)")
+        do {
+            // Create an AVAsset and preload essential properties
+            let asset = AVAsset(url: url)
+            let propertyKeys = ["playable", "duration", "tracks"]
+            try await asset.loadValues(forKeys: propertyKeys)
+            
+            // Verify the asset is playable
+            guard try await asset.isPlayable else {
+                throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video is not playable"])
+            }
+            
+            // Create AVPlayerItem with the loaded asset
+            let playerItem = AVPlayerItem(asset: asset)
+            
+            await MainActor.run {
+                // Create new player
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.isMuted = isMuted
+                
+                // Configure looping
+                NotificationCenter.default.removeObserver(self)
+                NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemDidPlayToEndTime,
+                    object: playerItem,
+                    queue: .main
+                ) { [weak newPlayer] _ in
+                    newPlayer?.seek(to: .zero)
+                    newPlayer?.play()
+                }
+                
+                // Set up error observation
+                NotificationCenter.default.addObserver(
+                    forName: .AVPlayerItemFailedToPlayToEndTime,
+                    object: playerItem,
+                    queue: .main
+                ) { notification in
+                    if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                        print("Error playing video: \(error.localizedDescription)")
+                        errorMessage = error.localizedDescription
+                        showError = true
+                    }
+                }
+                
+                // Set the player and play
+                self.player = newPlayer
+                newPlayer.play()
+                isLoadingVideo = false
+                print("Started playing video: \(video.id)")
+            }
+        } catch {
+            await MainActor.run {
+                isLoadingVideo = false
+                errorMessage = error.localizedDescription
+                showError = true
+                print("Error loading video: \(error.localizedDescription)")
             }
         }
-        
-        // Set the player and play
-        self.player = newPlayer
-        newPlayer.play()
-        print("Started playing video: \(video.id)")
     }
     
     private func cleanupPlayer() {
+        NotificationCenter.default.removeObserver(self)
         player?.pause()
         player = nil
     }
