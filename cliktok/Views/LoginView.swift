@@ -19,6 +19,41 @@ struct LoginView: View {
                 Text("Welcome to ClikTok")
                     .font(.largeTitle)
                     .fontWeight(.bold)
+                    .padding(.bottom, 20)
+                
+                // Guest Login Button
+                Button(action: {
+                    Task {
+                        isLoading = true
+                        defer { isLoading = false }
+                        
+                        do {
+                            try await authManager.signInAnonymously()
+                        } catch {
+                            showError = true
+                            errorMessage = error.localizedDescription
+                        }
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: "person.fill")
+                        Text("Continue as Guest")
+                        if isLoading {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.green)
+                    .cornerRadius(10)
+                }
+                .disabled(isLoading)
+                
+                Text("or")
+                    .foregroundColor(.gray)
+                    .padding(.vertical, 10)
                 
                 TextField("Email", text: $email)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -53,6 +88,7 @@ struct LoginView: View {
                     }
                 }) {
                     HStack {
+                        Image(systemName: isSignUp ? "person.badge.plus" : "person.fill")
                         Text(isSignUp ? "Sign Up" : "Sign In")
                         if isLoading {
                             ProgressView()
@@ -66,24 +102,6 @@ struct LoginView: View {
                     .cornerRadius(10)
                 }
                 .disabled(isLoading || email.isEmpty || password.isEmpty)
-                
-                Button(action: {
-                    Task {
-                        isLoading = true
-                        defer { isLoading = false }
-                        
-                        do {
-                            try await authManager.signInAnonymously()
-                        } catch {
-                            showError = true
-                            errorMessage = error.localizedDescription
-                        }
-                    }
-                }) {
-                    Text("Continue as Guest")
-                        .foregroundColor(.gray)
-                }
-                .disabled(isLoading)
                 
                 Button(action: {
                     withAnimation {
@@ -102,6 +120,7 @@ struct LoginView: View {
                         .foregroundColor(.red)
                         .font(.caption)
                         .multilineTextAlignment(.center)
+                        .padding(.horizontal)
                 }
             }
             .padding()

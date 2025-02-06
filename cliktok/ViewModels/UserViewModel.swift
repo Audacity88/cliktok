@@ -28,8 +28,24 @@ class UserViewModel: ObservableObject {
     func fetchUser(userId: String) async {
         do {
             let docSnapshot = try await db.collection("users").document(userId).getDocument()
-            if let user = try? docSnapshot.data(as: User.self) {
+            if let data = docSnapshot.data() {
+                let user = User(
+                    id: userId,
+                    username: data["username"] as? String ?? "",
+                    displayName: data["displayName"] as? String ?? "",
+                    bio: data["bio"] as? String ?? "",
+                    profileImageURL: data["profileImageURL"] as? String,
+                    isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
+                    balance: data["balance"] as? Double ?? 0.0
+                )
                 self.currentUser = user
+            } else {
+                // If no user data exists, create a default profile
+                try? await createUserProfile(
+                    username: "user_\(userId.prefix(6))",
+                    displayName: "New User",
+                    bio: "Welcome to my profile!"
+                )
             }
         } catch {
             self.error = error
@@ -42,9 +58,11 @@ class UserViewModel: ObservableObject {
         
         let now = Timestamp()
         let user = User(
+            id: userId,
             username: username,
             displayName: displayName,
             bio: bio,
+            profileImageURL: nil,
             isPrivateAccount: false,
             balance: 0.0
         )
@@ -133,19 +151,37 @@ class UserViewModel: ObservableObject {
     
     func fetchUserVideos(for userId: String? = nil) async {
         let targetUserId = userId ?? Auth.auth().currentUser?.uid
-        guard let targetUserId = targetUserId else { return }
+        guard let userId = targetUserId else { return }
         
         do {
-            let snapshot = try await db.collection("videos")
-                .whereField("user_id", isEqualTo: targetUserId)
+            let querySnapshot = try await db.collection("videos")
+                .whereField("user_id", isEqualTo: userId)
                 .order(by: "created_at", descending: true)
                 .getDocuments()
             
-            self.userVideos = snapshot.documents.compactMap { document in
-                try? document.data(as: Video.self)
+            self.userVideos = querySnapshot.documents.compactMap { document in
+                guard 
+                    let userID = document.data()["user_id"] as? String,
+                    let videoURL = document.data()["video_url"] as? String,
+                    let caption = document.data()["caption"] as? String,
+                    let createdAt = document.data()["created_at"] as? Timestamp
+                else {
+                    return nil
+                }
+                
+                return Video(
+                    id: document.documentID,
+                    userID: userID,
+                    videoURL: videoURL,
+                    thumbnailURL: document.data()["thumbnail_url"] as? String,
+                    caption: caption,
+                    hashtags: document.data()["hashtags"] as? [String] ?? [],
+                    createdAt: createdAt.dateValue(),
+                    likes: document.data()["likes"] as? Int ?? 0,
+                    views: document.data()["views"] as? Int ?? 0
+                )
             }
         } catch {
-            self.error = error
             print("Error fetching user videos: \(error)")
         }
     }
