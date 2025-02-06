@@ -3,6 +3,7 @@ import AVKit
 
 struct VideoGridView: View {
     let videos: [Video]
+    let showBackButton: Bool
     @State private var selectedVideo: Video?
     
     private let columns = [
@@ -24,7 +25,7 @@ struct VideoGridView: View {
             }
         }
         .fullScreenCover(item: $selectedVideo) { video in
-            VideoPlayerView(video: video)
+            VideoPlayerView(video: video, showBackButton: showBackButton)
                 .edgesIgnoringSafeArea(.all)
         }
     }

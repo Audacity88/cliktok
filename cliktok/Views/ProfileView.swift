@@ -100,13 +100,19 @@ struct ProfileContentView: View {
                     ProfileInfoView(
                         user: user,
                         isCurrentUser: isCurrentUser,
+                        isEditing: $isEditing,
                         viewModel: viewModel
                     )
                 }
                 
-                // Videos Grid
-                VideoGridView(videos: viewModel.userVideos)
-                    .padding(.top)
+                // User's Videos Grid
+                if !viewModel.userVideos.isEmpty {
+                    VideoGridView(videos: viewModel.userVideos, showBackButton: true)
+                } else {
+                    Text("No videos yet")
+                        .foregroundColor(.gray)
+                        .padding()
+                }
             }
         }
         .navigationTitle(isCurrentUser ? "Profile" : user.displayName)
@@ -166,6 +172,7 @@ struct ProfileEditForm: View {
 struct ProfileInfoView: View {
     let user: User
     let isCurrentUser: Bool
+    @Binding var isEditing: Bool
     @ObservedObject var viewModel: UserViewModel
     
     var body: some View {

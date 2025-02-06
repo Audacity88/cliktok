@@ -9,6 +9,7 @@ struct VideoPlayerView: View {
     @StateObject private var viewModel = VideoFeedViewModel()
     @Environment(\.dismiss) private var dismiss
     let video: Video
+    let showBackButton: Bool
     @State private var player: AVPlayer?
     @State private var isMuted = false
     @State private var showControls = true
@@ -35,21 +36,23 @@ struct VideoPlayerView: View {
                 
                 // Back Button
                 VStack {
-                    HStack {
-                        Button(action: {
-                            cleanupPlayer()
-                            dismiss()
-                        }) {
-                            Image(systemName: "chevron.left")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                                .padding()
-                                .background(Circle().fill(Color.black.opacity(0.5)))
+                    if showBackButton {
+                        HStack {
+                            Button(action: {
+                                cleanupPlayer()
+                                dismiss()
+                            }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                            }
+                            .padding(.leading)
+                            Spacer()
                         }
-                        .padding(.leading)
-                        Spacer()
+                        .padding(.top, 50)
                     }
-                    .padding(.top, 50)
                     
                     Spacer()
                     
@@ -212,6 +215,7 @@ struct VideoPlayerView: View {
                 loadAndPlayVideo()
                 Task {
                     await viewModel.fetchCreators(for: [video])
+                    await tipViewModel.loadTipHistory()
                 }
             }
             .onDisappear {

@@ -16,7 +16,7 @@ struct VideoFeedView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video)
+                            VideoPlayerView(video: video, showBackButton: false)
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .rotationEffect(.degrees(-90))
                                 .tag(index)
@@ -65,4 +65,4 @@ extension UIView {
         Mirror(reflecting: self).children.compactMap { $0.value as? UIView }
     }
 }
-#endif 
+#endif
