@@ -215,6 +215,7 @@ struct VideoPlayerView: View {
                 loadAndPlayVideo()
                 Task {
                     await viewModel.fetchCreators(for: [video])
+                    await tipViewModel.loadBalance()
                     await tipViewModel.loadTipHistory()
                 }
             }

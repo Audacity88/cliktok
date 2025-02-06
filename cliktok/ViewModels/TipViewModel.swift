@@ -7,7 +7,8 @@ import Foundation
 class TipViewModel: ObservableObject {
     @Published var isProcessing = false
     @Published var error: Error?
-    @Published var tipHistory: [Tip] = []
+    @Published var sentTips: [Tip] = []
+    @Published var receivedTips: [Tip] = []
     @Published var balance: Double = 0.0
     @Published var selectedAmount: Double?
     @Published var showSuccessAlert = false
@@ -21,15 +22,23 @@ class TipViewModel: ObservableObject {
         paymentManager.isLoading
     }
     
+    init() {
+        Task {
+            await loadBalance()
+            await loadTipHistory()
+        }
+    }
+    
     // MARK: - Public Methods
     
     @MainActor
-    func addFunds(_ amount: Double) async {
+    func addFunds(_ amount: Double) async throws {
         if paymentManager.isDevelopmentMode {
+            print("Adding funds in development mode: \(amount)")
             let decimalAmount = NSDecimalNumber(value: amount).decimalValue
             paymentManager.addTestMoney(amount: decimalAmount)
-            let currentBalance = paymentManager.getCurrentBalance()
-            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
+            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            print("New balance after adding funds: \(balance)")
         } else {
             do {
                 let newBalance = balance + amount
@@ -37,6 +46,7 @@ class TipViewModel: ObservableObject {
                 print("Successfully added $\(amount). New balance: $\(newBalance)")
             } catch {
                 print("Failed to add funds: \(error)")
+                throw error
             }
         }
     }
@@ -76,13 +86,14 @@ class TipViewModel: ObservableObject {
         guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
         
         do {
-            let snapshot = try await db.collection("tips")
+            // Load sent tips
+            let sentSnapshot = try await db.collection("tips")
                 .whereField("senderID", isEqualTo: userId)
                 .order(by: "timestamp", descending: true)
                 .limit(to: 20)
                 .getDocuments()
             
-            self.tipHistory = snapshot.documents.compactMap { document in
+            self.sentTips = sentSnapshot.documents.compactMap { document in
                 guard let amount = document.data()["amount"] as? Double,
                       let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
                       let videoID = document.data()["videoID"] as? String,
@@ -100,6 +111,42 @@ class TipViewModel: ObservableObject {
                           receiverID: receiverID,
                           transactionID: transactionID)
             }
+            
+            // Load received tips
+            let receivedSnapshot = try await db.collection("tips")
+                .whereField("receiverID", isEqualTo: userId)
+                .order(by: "timestamp", descending: true)
+                .limit(to: 20)
+                .getDocuments()
+            
+            self.receivedTips = receivedSnapshot.documents.compactMap { document in
+                guard let amount = document.data()["amount"] as? Double,
+                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
+                      let videoID = document.data()["videoID"] as? String,
+                      let senderID = document.data()["senderID"] as? String,
+                      let receiverID = document.data()["receiverID"] as? String,
+                      let transactionID = document.data()["transactionID"] as? String else {
+                    return nil
+                }
+                
+                return Tip(id: document.documentID,
+                          amount: amount,
+                          timestamp: timestamp,
+                          videoID: videoID,
+                          senderID: senderID,
+                          receiverID: receiverID,
+                          transactionID: transactionID)
+            }
+            
+            // Add received tips to balance in development mode
+            if paymentManager.isDevelopmentMode {
+                let totalReceived = receivedTips.reduce(0.0) { $0 + $1.amount }
+                if totalReceived > 0 {
+                    paymentManager.addTestMoney(amount: NSDecimalNumber(value: totalReceived).decimalValue)
+                    balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+                }
+            }
+            
         } catch {
             print("Error loading tip history: \(error)")
         }
@@ -122,7 +169,9 @@ class TipViewModel: ObservableObject {
     @MainActor
     func loadBalance() async {
         if paymentManager.isDevelopmentMode {
-            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            let currentBalance = paymentManager.getCurrentBalance()
+            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
+            print("Loaded development mode balance: \(balance)")
         } else {
             guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
             
@@ -141,6 +190,7 @@ class TipViewModel: ObservableObject {
                 } else if let userBalance = doc.data()?["balance"] as? Double {
                     balance = userBalance
                 }
+                print("Loaded production mode balance: \(balance)")
             } catch {
                 print("Error loading balance: \(error)")
             }
@@ -190,9 +240,34 @@ class TipViewModel: ObservableObject {
         }
         
         // Check balance
-        if !paymentManager.isDevelopmentMode {
-            await loadBalance()
+        if paymentManager.isDevelopmentMode {
+            let decimalAmount = NSDecimalNumber(value: amount).decimalValue
+            if !paymentManager.useBalance(amount: decimalAmount) {
+                throw PaymentError.insufficientFunds
+            }
+            // Update local balance after successful tip
+            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            
+            // Create tip record
+            let tipRef = db.collection("tips").document()
+            let tipData: [String: Any] = [
+                "amount": amount,
+                "timestamp": FieldValue.serverTimestamp(),
+                "videoID": videoID,
+                "senderID": senderID,
+                "receiverID": receiverID,
+                "transactionID": UUID().uuidString
+            ]
+            
+            try await tipRef.setData(tipData)
+            
+            // Refresh tip history
+            await loadTipHistory()
+            return
         }
+        
+        // Production mode handling
+        await loadBalance()
         
         if balance < amount {
             throw PaymentError.insufficientFunds

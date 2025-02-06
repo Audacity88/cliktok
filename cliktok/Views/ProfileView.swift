@@ -116,16 +116,31 @@ struct ProfileContentView: View {
             }
         }
         .navigationTitle(isCurrentUser ? "Profile" : user.displayName)
-        .navigationBarItems(trailing: isCurrentUser ? Button(isEditing ? "Cancel" : "Edit") {
-            if isEditing {
-                isEditing = false
-            } else {
-                username = user.username
-                displayName = user.displayName
-                bio = user.bio
-                isEditing = true
+        .navigationBarItems(
+            trailing: HStack {
+                if isCurrentUser {
+                    Button(isEditing ? "Cancel" : "Edit") {
+                        if isEditing {
+                            isEditing = false
+                        } else {
+                            username = user.username
+                            displayName = user.displayName
+                            bio = user.bio
+                            isEditing = true
+                        }
+                    }
+                    
+                    if !isEditing {
+                        Button(action: {
+                            try? AuthenticationManager.shared.signOut()
+                        }) {
+                            Text("Sign Out")
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
             }
-        } : nil)
+        )
     }
 }
 

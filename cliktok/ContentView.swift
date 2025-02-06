@@ -32,26 +32,11 @@ struct ContentView: View {
                         .toolbarBackground(.visible, for: .navigationBar)
                         .toolbarBackground(Color.black, for: .navigationBar)
                         .navigationBarItems(
-                            leading: Button(action: {
-                                try? authManager.signOut()
+                            trailing: Button(action: {
+                                showingTestData = true
                             }) {
-                                Text("Sign Out")
+                                Image(systemName: "plus.circle")
                                     .foregroundColor(.white)
-                            },
-                            trailing: HStack {
-                                Button(action: {
-                                    showingVideoUpload = true
-                                }) {
-                                    Image(systemName: "square.and.arrow.up")
-                                        .foregroundColor(.white)
-                                }
-                                
-                                Button(action: {
-                                    showingTestData = true
-                                }) {
-                                    Image(systemName: "plus.circle")
-                                        .foregroundColor(.white)
-                                }
                             }
                         )
                 }
@@ -70,6 +55,18 @@ struct ContentView: View {
                 }
                 .tag(1)
                 
+                Button(action: {
+                    showingVideoUpload = true
+                }) {
+                    Image(systemName: "plus.square.fill")
+                        .font(.system(size: 24))
+                }
+                .tabItem {
+                    Image(systemName: "plus.square.fill")
+                    Text("Upload")
+                }
+                .tag(2)
+                
                 NavigationStack {
                     ProfileView()
                 }
@@ -77,7 +74,7 @@ struct ContentView: View {
                     Image(systemName: "person.fill")
                     Text("Profile")
                 }
-                .tag(2)
+                .tag(3)
             }
             .onChange(of: selectedTab) { oldValue, newValue in
                 // Update tab bar appearance based on selected tab
