@@ -1,11 +1,13 @@
 import SwiftUI
 import PhotosUI
 import AVKit
+import FirebaseAuth
 
 struct VideoUploadView: View {
     @StateObject private var viewModel = VideoUploadViewModel()
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
+    let onDismiss: () -> Void
     
     @State private var selectedItem: PhotosPickerItem?
     @State private var caption = ""
@@ -17,71 +19,76 @@ struct VideoUploadView: View {
     
     var body: some View {
         NavigationView {
-            Form {
-                Section {
-                    PhotosPicker(selection: $selectedItem,
-                               matching: .videos,
-                               photoLibrary: .shared()) {
-                        Label(selectedItem == nil ? "Select Video" : "Change Video",
-                              systemImage: "video.badge.plus")
-                    }
-                    
-                    if viewModel.isUploading {
-                        ProgressView("Uploading...", value: viewModel.progress, total: 1.0)
-                    }
-                    
-                    if videoURL != nil {
-                        Button("Preview Video") {
-                            showingPreview = true
+            if Auth.auth().currentUser?.isAnonymous == true {
+                GuestRestrictedView()
+            } else {
+                Form {
+                    Section {
+                        PhotosPicker(selection: $selectedItem,
+                                   matching: .videos,
+                                   photoLibrary: .shared()) {
+                            Label(selectedItem == nil ? "Select Video" : "Change Video",
+                                  systemImage: "video.badge.plus")
                         }
-                    }
-                }
-                
-                Section(header: Text("Details")) {
-                    TextField("Caption", text: $caption)
-                    TextField("Hashtags (comma separated)", text: $hashtags)
-                }
-                
-                Section {
-                    Button(action: uploadVideo) {
+                        
                         if viewModel.isUploading {
-                            ProgressView()
-                        } else {
-                            Text("Upload Video")
+                            ProgressView("Uploading...", value: viewModel.progress, total: 1.0)
+                        }
+                        
+                        if videoURL != nil {
+                            Button("Preview Video") {
+                                showingPreview = true
+                            }
                         }
                     }
-                    .disabled(videoURL == nil || caption.isEmpty || viewModel.isUploading)
-                }
-            }
-            .navigationTitle("Upload Video")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
+                    
+                    Section(header: Text("Details")) {
+                        TextField("Caption", text: $caption)
+                        TextField("Hashtags (comma separated)", text: $hashtags)
+                    }
+                    
+                    Section {
+                        Button(action: uploadVideo) {
+                            if viewModel.isUploading {
+                                ProgressView()
+                            } else {
+                                Text("Upload Video")
+                            }
+                        }
+                        .disabled(videoURL == nil || caption.isEmpty || viewModel.isUploading)
                     }
                 }
-            }
-            .onChange(of: selectedItem) { oldValue, newValue in
-                if let newValue {
-                    handleSelection(newValue)
+                .navigationTitle("Upload Video")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") {
+                            dismiss()
+                        }
+                    }
                 }
-            }
-            .alert("Error", isPresented: $showAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(alertMessage)
-            }
-            .sheet(isPresented: $showingPreview) {
-                if let previewURL = videoURL {
-                    VideoPreviewView(videoURL: previewURL)
+                .onChange(of: selectedItem) { oldValue, newValue in
+                    if let newValue {
+                        handleSelection(newValue)
+                    }
                 }
-            }
-            .onAppear {
-                viewModel.onUploadComplete = {
-                    Task {
-                        await feedViewModel.loadInitialVideos()
-                        dismiss()
+                .alert("Error", isPresented: $showAlert) {
+                    Button("OK", role: .cancel) { }
+                } message: {
+                    Text(alertMessage)
+                }
+                .sheet(isPresented: $showingPreview) {
+                    if let previewURL = videoURL {
+                        VideoPreviewView(videoURL: previewURL)
+                    }
+                }
+                .onAppear {
+                    viewModel.onUploadComplete = {
+                        Task {
+                            await feedViewModel.loadInitialVideos()
+                            dismiss()
+                            onDismiss()
+                        }
                     }
                 }
             }
@@ -155,4 +162,4 @@ struct VideoPreviewView: View {
                 }
         }
     }
-} 
+}

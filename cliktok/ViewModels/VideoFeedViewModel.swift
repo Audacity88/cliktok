@@ -85,7 +85,7 @@ class VideoFeedViewModel: ObservableObject {
                                 isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
                                 balance: data["balance"] as? Double
                             )
-                            print("Successfully created user: \(user.displayName)")
+                            print("Successfully loaded creator: \(user.displayName)")
                             videoCreators[creatorId] = user
                         }
                     } else {

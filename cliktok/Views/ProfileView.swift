@@ -22,20 +22,29 @@ struct ProfileView: View {
         return userId == Auth.auth().currentUser?.uid
     }
     
+    private var canEdit: Bool {
+        checkIsCurrentUser() && Auth.auth().currentUser?.isAnonymous != true
+    }
+    
     var body: some View {
         Group {
             if let user = viewModel.currentUser {
-                ProfileContentView(
-                    user: user,
-                    isCurrentUser: checkIsCurrentUser(),
-                    isEditing: .init(get: { isEditing }, set: { isEditing = $0 }),
-                    username: .init(get: { username }, set: { username = $0 }),
-                    displayName: .init(get: { displayName }, set: { displayName = $0 }),
-                    bio: .init(get: { bio }, set: { bio = $0 }),
-                    selectedItem: .init(get: { selectedItem }, set: { selectedItem = $0 }),
-                    selectedImageData: .init(get: { selectedImageData }, set: { selectedImageData = $0 }),
-                    viewModel: viewModel
-                )
+                if isEditing && !canEdit {
+                    GuestRestrictedView()
+                } else {
+                    ProfileContentView(
+                        user: user,
+                        isCurrentUser: checkIsCurrentUser(),
+                        canEdit: canEdit,
+                        isEditing: .init(get: { isEditing }, set: { isEditing = $0 }),
+                        username: .init(get: { username }, set: { username = $0 }),
+                        displayName: .init(get: { displayName }, set: { displayName = $0 }),
+                        bio: .init(get: { bio }, set: { bio = $0 }),
+                        selectedItem: .init(get: { selectedItem }, set: { selectedItem = $0 }),
+                        selectedImageData: .init(get: { selectedImageData }, set: { selectedImageData = $0 }),
+                        viewModel: viewModel
+                    )
+                }
             } else {
                 ProgressView()
             }
@@ -68,6 +77,7 @@ struct ProfileView: View {
 struct ProfileContentView: View {
     let user: User
     let isCurrentUser: Bool
+    let canEdit: Bool
     @Binding var isEditing: Bool
     @Binding var username: String
     @Binding var displayName: String
@@ -100,6 +110,7 @@ struct ProfileContentView: View {
                     ProfileInfoView(
                         user: user,
                         isCurrentUser: isCurrentUser,
+                        canEdit: canEdit,
                         isEditing: $isEditing,
                         viewModel: viewModel
                     )
@@ -119,14 +130,16 @@ struct ProfileContentView: View {
         .navigationBarItems(
             trailing: HStack {
                 if isCurrentUser {
-                    Button(isEditing ? "Cancel" : "Edit") {
-                        if isEditing {
-                            isEditing = false
-                        } else {
-                            username = user.username
-                            displayName = user.displayName
-                            bio = user.bio
-                            isEditing = true
+                    if canEdit {
+                        Button(isEditing ? "Cancel" : "Edit") {
+                            if isEditing {
+                                isEditing = false
+                            } else {
+                                username = user.username
+                                displayName = user.displayName
+                                bio = user.bio
+                                isEditing = true
+                            }
                         }
                     }
                     
@@ -187,6 +200,7 @@ struct ProfileEditForm: View {
 struct ProfileInfoView: View {
     let user: User
     let isCurrentUser: Bool
+    let canEdit: Bool
     @Binding var isEditing: Bool
     @ObservedObject var viewModel: UserViewModel
     
@@ -221,7 +235,7 @@ struct ProfileInfoView: View {
             }
             .padding(.top, 10)
             
-            if isCurrentUser {
+            if canEdit {
                 Toggle("Private Account", isOn: Binding(
                     get: { user.isPrivateAccount },
                     set: { _ in

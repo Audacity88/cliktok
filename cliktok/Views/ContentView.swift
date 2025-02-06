@@ -23,6 +23,10 @@ struct ContentView: View {
         UITabBar.appearance().unselectedItemTintColor = .gray
     }
     
+    func switchToTab(_ tab: Int) {
+        selectedTab = tab
+    }
+    
     var body: some View {
         if authManager.isAuthenticated {
             TabView(selection: $selectedTab) {
@@ -86,8 +90,10 @@ struct ContentView: View {
                 TestDataView()
             }
             .sheet(isPresented: $showingVideoUpload) {
-                VideoUploadView()
-                    .environmentObject(feedViewModel)
+                VideoUploadView(onDismiss: {
+                    switchToTab(0)  // Switch to home tab
+                })
+                .environmentObject(feedViewModel)
             }
         } else {
             LoginView()
