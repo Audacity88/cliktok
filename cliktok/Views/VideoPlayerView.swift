@@ -4,6 +4,103 @@ import AVFoundation
 import FirebaseFirestore
 
 #if os(iOS)
+
+// Video Asset Loader to handle caching
+actor VideoAssetLoader {
+    static let shared = VideoAssetLoader()
+    
+    private let cache: URLCache
+    private var loadingAssets: [URL: Task<AVAsset, Error>] = [:]
+    private var prefetchTasks: [URL: Task<Void, Never>] = [:]
+    
+    private init() {
+        // Create a 512MB cache
+        let cacheSizeInBytes = 512 * 1024 * 1024
+        self.cache = URLCache(memoryCapacity: cacheSizeInBytes / 4,
+                            diskCapacity: cacheSizeInBytes,
+                            diskPath: "video_cache")
+    }
+    
+    func prefetchAsset(for url: URL) {
+        // Don't prefetch if already loading or prefetching
+        guard loadingAssets[url] == nil, prefetchTasks[url] == nil else { return }
+        
+        let task = Task {
+            do {
+                let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 60)
+                
+                // If not in cache, download it
+                if cache.cachedResponse(for: request) == nil {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: request)
+                }
+            } catch {
+                print("Prefetch failed for \(url): \(error.localizedDescription)")
+            }
+        }
+        
+        prefetchTasks[url] = task
+    }
+    
+    func cancelPrefetch(for url: URL) {
+        prefetchTasks[url]?.cancel()
+        prefetchTasks[url] = nil
+    }
+    
+    func loadAsset(for url: URL) async throws -> AVAsset {
+        // Check if we're already loading this asset
+        if let existingTask = loadingAssets[url] {
+            return try await existingTask.value
+        }
+        
+        // Create a new loading task
+        let task = Task {
+            let asset: AVAsset
+            
+            // Create URL request
+            let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 60)
+            
+            // Check cache
+            if let cachedResponse = cache.cachedResponse(for: request) {
+                let localURL = try await saveToDisk(data: cachedResponse.data)
+                asset = AVAsset(url: localURL)
+            } else {
+                // Download and cache
+                let (data, response) = try await URLSession.shared.data(for: request)
+                cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: request)
+                let localURL = try await saveToDisk(data: data)
+                asset = AVAsset(url: localURL)
+            }
+            
+            // Load essential properties
+            try await asset.loadValues(forKeys: ["playable", "duration", "tracks"])
+            return asset
+        }
+        
+        loadingAssets[url] = task
+        
+        // Clean up after loading
+        defer {
+            Task { await cleanupLoadingTask(for: url) }
+        }
+        
+        return try await task.value
+    }
+    
+    private func cleanupLoadingTask(for url: URL) {
+        loadingAssets[url] = nil
+    }
+    
+    private func saveToDisk(data: Data) async throws -> URL {
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileName = UUID().uuidString + ".mp4"
+        let fileURL = tempDir.appendingPathComponent(fileName)
+        
+        try data.write(to: fileURL)
+        return fileURL
+    }
+}
+
 struct VideoPlayerView: View {
     @StateObject private var tipViewModel = TipViewModel()
     @StateObject private var viewModel = VideoFeedViewModel()
@@ -22,6 +119,13 @@ struct VideoPlayerView: View {
     @State private var showTippedText = false
     @State private var showTipSheet = false
     @State private var isLoadingVideo = false
+    let onPrefetch: (([Video]) -> Void)?
+    
+    init(video: Video, showBackButton: Bool, onPrefetch: (([Video]) -> Void)? = nil) {
+        self.video = video
+        self.showBackButton = showBackButton
+        self.onPrefetch = onPrefetch
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -262,10 +366,8 @@ struct VideoPlayerView: View {
         }
         
         do {
-            // Create an AVAsset and preload essential properties
-            let asset = AVAsset(url: url)
-            let propertyKeys = ["playable", "duration", "tracks"]
-            try await asset.loadValues(forKeys: propertyKeys)
+            // Load asset using the caching loader
+            let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
             
             // Verify the asset is playable
             guard try await asset.isPlayable else {
@@ -331,4 +433,5 @@ struct VideoPlayerView: View {
         player?.isMuted = isMuted
     }
 }
+
 #endif

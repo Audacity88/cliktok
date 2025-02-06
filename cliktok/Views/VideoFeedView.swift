@@ -16,10 +16,12 @@ struct VideoFeedView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video, showBackButton: false)
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                                .rotationEffect(.degrees(-90))
-                                .tag(index)
+                            VideoPlayerView(video: video, showBackButton: false) { _ in
+                                prefetchVideos(currentIndex: index)
+                            }
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .rotationEffect(.degrees(-90))
+                            .tag(index)
                         }
                     }
                     .frame(
@@ -46,9 +48,11 @@ struct VideoFeedView: View {
                 }
             }
         }
-        .onChange(of: currentIndex) { newIndex in
+        .onChange(of: currentIndex) { oldValue, newValue in
+            prefetchVideos(currentIndex: newValue)
+            
             // Load more videos if we're near the end
-            if newIndex >= viewModel.videos.count - 2 {
+            if newValue >= viewModel.videos.count - 2 {
                 Task {
                     await viewModel.loadMoreVideos()
                 }
@@ -56,6 +60,40 @@ struct VideoFeedView: View {
         }
         .task {
             await viewModel.loadInitialVideos()
+        }
+    }
+    
+    private func prefetchVideos(currentIndex: Int) {
+        // Prefetch next 2 videos
+        let nextIndices = (1...2).compactMap { offset -> Int? in
+            let index = currentIndex + offset
+            return index < viewModel.videos.count ? index : nil
+        }
+        
+        let videosToPreload = nextIndices.map { viewModel.videos[$0] }
+        
+        // Cancel any prefetch tasks for videos we've moved past
+        let previousIndices = (-2...0).compactMap { offset -> Int? in
+            let index = currentIndex + offset
+            return index >= 0 ? index : nil
+        }
+        
+        // Cancel prefetch for videos we've moved past
+        previousIndices.forEach { index in
+            if let videoURL = URL(string: viewModel.videos[index].videoURL) {
+                Task {
+                    await VideoAssetLoader.shared.cancelPrefetch(for: videoURL)
+                }
+            }
+        }
+        
+        // Start prefetching upcoming videos
+        videosToPreload.forEach { video in
+            if let url = URL(string: video.videoURL) {
+                Task {
+                    await VideoAssetLoader.shared.prefetchAsset(for: url)
+                }
+            }
         }
     }
 }
