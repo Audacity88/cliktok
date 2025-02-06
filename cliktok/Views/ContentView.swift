@@ -20,7 +20,22 @@ struct ContentView: View {
     @StateObject private var authManager = AuthenticationManager.shared
     
     init() {
-        // Set the unselected color to gray
+        // Set the unselected color to gray and configure dark appearance
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = .black
+        
+        // Selected state - white
+        appearance.stackedLayoutAppearance.selected.iconColor = .white
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
+        
+        // Unselected state - gray
+        appearance.stackedLayoutAppearance.normal.iconColor = .gray
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        
+        // Apply the appearance
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
         UITabBar.appearance().unselectedItemTintColor = .gray
     }
     
@@ -78,12 +93,6 @@ struct ContentView: View {
                     }
                     .tag(3)
                 }
-                .onChange(of: selectedTab) { oldValue, newValue in
-                    // Update tab bar appearance based on selected tab
-                    let tabBarAppearance = newValue == 1 ? lightAppearance : darkAppearance
-                    UITabBar.appearance().scrollEdgeAppearance = tabBarAppearance
-                    UITabBar.appearance().standardAppearance = tabBarAppearance
-                }
                 .sheet(isPresented: $showingVideoUpload) {
                     VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
                         switchToTab(0)  // Switch to home tab
@@ -101,39 +110,6 @@ struct ContentView: View {
             isLoading = false
         }
     }
-    
-    // Store appearances as properties to avoid recreation
-    private let lightAppearance: UITabBarAppearance = {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = .white
-        
-        // Selected state - black
-        appearance.stackedLayoutAppearance.selected.iconColor = .black
-        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.black]
-        
-        // Unselected state - gray
-        appearance.stackedLayoutAppearance.normal.iconColor = .gray
-        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
-        
-        return appearance
-    }()
-    
-    private let darkAppearance: UITabBarAppearance = {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = .black
-        
-        // Selected state - white
-        appearance.stackedLayoutAppearance.selected.iconColor = .white
-        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
-        
-        // Unselected state - gray
-        appearance.stackedLayoutAppearance.normal.iconColor = .gray
-        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
-        
-        return appearance
-    }()
 }
 
 #Preview {
