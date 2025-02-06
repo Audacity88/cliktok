@@ -4,6 +4,11 @@ import SwiftUI
 struct VideoFeedView: View {
     @StateObject private var viewModel = VideoFeedViewModel()
     @State private var currentIndex = 0
+    @Binding var scrollToTop: Bool
+    
+    init(scrollToTop: Binding<Bool> = .constant(false)) {
+        self._scrollToTop = scrollToTop
+    }
     
     var body: some View {
         GeometryReader { geometry in
@@ -58,8 +63,28 @@ struct VideoFeedView: View {
                 }
             }
         }
+        .onChange(of: scrollToTop) { oldValue, newValue in
+            if newValue {
+                Task {
+                    // Refresh feed and scroll to top
+                    await viewModel.loadInitialVideos()
+                    currentIndex = 0
+                    
+                    // Start prefetching for the first few videos
+                    if !viewModel.videos.isEmpty {
+                        prefetchVideos(currentIndex: 0)
+                    }
+                    
+                    // Reset the flag
+                    scrollToTop = false
+                }
+            }
+        }
         .task {
             await viewModel.loadInitialVideos()
+            if !viewModel.videos.isEmpty {
+                prefetchVideos(currentIndex: 0)
+            }
         }
     }
     

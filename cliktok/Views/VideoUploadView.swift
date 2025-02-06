@@ -7,6 +7,7 @@ struct VideoUploadView: View {
     @StateObject private var viewModel = VideoUploadViewModel()
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
+    @Binding var scrollToTop: Bool
     let onDismiss: () -> Void
     
     @State private var selectedItem: PhotosPickerItem?
@@ -82,14 +83,15 @@ struct VideoUploadView: View {
                         VideoPreviewView(videoURL: previewURL)
                     }
                 }
-                .onAppear {
-                    viewModel.onUploadComplete = {
-                        Task {
-                            await feedViewModel.loadInitialVideos()
-                            dismiss()
-                            onDismiss()
-                        }
-                    }
+            }
+        }
+        .onAppear {
+            viewModel.onUploadComplete = {
+                Task {
+                    scrollToTop = true
+                    await feedViewModel.loadInitialVideos()
+                    dismiss()
+                    onDismiss()
                 }
             }
         }

@@ -119,6 +119,9 @@ struct VideoPlayerView: View {
     @State private var showTippedText = false
     @State private var showTipSheet = false
     @State private var isLoadingVideo = false
+    @State private var isPlaying = true
+    @State private var showPlayButton = false
+    @State private var timeObserverToken: Any?
     let onPrefetch: (([Video]) -> Void)?
     
     init(video: Video, showBackButton: Bool, onPrefetch: (([Video]) -> Void)? = nil) {
@@ -134,6 +137,23 @@ struct VideoPlayerView: View {
                     VideoPlayer(player: player)
                         .edgesIgnoringSafeArea(.all)
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                        .overlay(
+                            Color.black.opacity(0.01)  // Nearly transparent overlay to catch taps
+                                .onTapGesture(count: 1) {
+                                    togglePlayPause()
+                                }
+                        )
+                        .overlay(
+                            Group {
+                                if showPlayButton {
+                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                        .font(.system(size: 72))
+                                        .foregroundColor(.white.opacity(0.8))
+                                        .shadow(radius: 4)
+                                        .transition(.opacity)
+                                }
+                            }
+                        )
                 } else if isLoadingVideo {
                     Color.black
                         .edgesIgnoringSafeArea(.all)
@@ -382,6 +402,12 @@ struct VideoPlayerView: View {
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = isMuted
                 
+                // Add periodic time observer for better state management
+                let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+                timeObserverToken = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
+                    isPlaying = newPlayer.timeControlStatus == .playing
+                }
+                
                 // Configure looping
                 NotificationCenter.default.removeObserver(self)
                 NotificationCenter.default.addObserver(
@@ -409,6 +435,7 @@ struct VideoPlayerView: View {
                 // Set the player and play
                 self.player = newPlayer
                 newPlayer.play()
+                isPlaying = true
                 isLoadingVideo = false
                 print("Started playing video: \(video.id)")
             }
@@ -424,13 +451,38 @@ struct VideoPlayerView: View {
     
     private func cleanupPlayer() {
         NotificationCenter.default.removeObserver(self)
+        if let player = player, let token = timeObserverToken {
+            player.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
         player?.pause()
         player = nil
+        isPlaying = false
     }
     
     private func toggleMute() {
         isMuted.toggle()
         player?.isMuted = isMuted
+    }
+    
+    private func togglePlayPause() {
+        if isPlaying {
+            player?.pause()
+        } else {
+            player?.play()
+        }
+        
+        withAnimation {
+            isPlaying.toggle()
+            showPlayButton = true
+        }
+        
+        // Hide the play button after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            withAnimation {
+                showPlayButton = false
+            }
+        }
     }
 }
 

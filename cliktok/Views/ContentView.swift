@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var showingTestData = false
     @State private var showingVideoUpload = false
     @State private var selectedTab = 0
+    @State private var scrollToTop = false
     
     // Use the shared instance as a StateObject to observe changes
     @StateObject private var authManager = AuthenticationManager.shared
@@ -31,7 +32,7 @@ struct ContentView: View {
         if authManager.isAuthenticated {
             TabView(selection: $selectedTab) {
                 NavigationStack {
-                    VideoFeedView()
+                    VideoFeedView(scrollToTop: $scrollToTop)
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbarBackground(.visible, for: .navigationBar)
                         .toolbarBackground(Color.black, for: .navigationBar)
@@ -90,8 +91,9 @@ struct ContentView: View {
                 TestDataView()
             }
             .sheet(isPresented: $showingVideoUpload) {
-                VideoUploadView(onDismiss: {
+                VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
                     switchToTab(0)  // Switch to home tab
+                    scrollToTop = true  // Trigger scroll to top
                 })
                 .environmentObject(feedViewModel)
             }
