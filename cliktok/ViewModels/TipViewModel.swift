@@ -5,6 +5,8 @@ import Foundation
 
 @MainActor
 class TipViewModel: ObservableObject {
+    static let shared = TipViewModel()
+    
     @Published var isProcessing = false
     @Published var error: Error?
     @Published var sentTips: [Tip] = []
@@ -15,6 +17,7 @@ class TipViewModel: ObservableObject {
     
     private let db = Firestore.firestore()
     private let paymentManager = PaymentManager.shared
+    private var hasInitialized = false
     
     let tipAmounts = [1.00, 5.00, 10.00, 20.00]
     
@@ -22,28 +25,75 @@ class TipViewModel: ObservableObject {
         paymentManager.isLoading
     }
     
-    init() {
+    private init() {
         Task {
-            await loadBalance()
-            await loadTipHistory()
+            await initialize()
         }
+    }
+    
+    private func initialize() async {
+        guard !hasInitialized else { return }
+        hasInitialized = true
+        
+        // Only load balance once during initialization
+        await loadBalance()
+        // Load tip history without triggering balance load
+        await loadTipHistoryWithoutBalance()
     }
     
     // MARK: - Public Methods
     
+    private func logBalanceChange(oldBalance: Double, newBalance: Double, reason: String, details: [String: Any] = [:]) {
+        let change = newBalance - oldBalance
+        // Only log if there's an actual change or if it's a tip operation
+        if abs(change) > 0.001 || reason.contains("Tip") {
+            let timestamp = Date()
+            let mode = paymentManager.isDevelopmentMode ? "Development" : "Production"
+            
+            var logDetails: [String: Any] = [
+                "timestamp": timestamp,
+                "mode": mode,
+                "oldBalance": String(format: "%.2f", oldBalance),
+                "newBalance": String(format: "%.2f", newBalance),
+                "change": String(format: "%+.2f", change),
+                "reason": reason
+            ]
+            logDetails.merge(details) { current, _ in current }
+            
+            print("💰 Balance Change Log:")
+            print("  Time: \(timestamp)")
+            print("  Mode: \(mode)")
+            print("  Change: $\(String(format: "%+.2f", change)) (\(reason))")
+            print("  Old Balance: $\(String(format: "%.2f", oldBalance))")
+            print("  New Balance: $\(String(format: "%.2f", newBalance))")
+            if !details.isEmpty {
+                print("  Details:", details)
+            }
+            print("  ----------------------")
+        }
+    }
+    
     @MainActor
     func addFunds(_ amount: Double) async throws {
+        let oldBalance = balance
+        
         if paymentManager.isDevelopmentMode {
             print("Adding funds in development mode: \(amount)")
             let decimalAmount = NSDecimalNumber(value: amount).decimalValue
             paymentManager.addTestMoney(amount: decimalAmount)
             balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
-            print("New balance after adding funds: \(balance)")
+            logBalanceChange(oldBalance: oldBalance, 
+                           newBalance: balance, 
+                           reason: "Added Test Funds",
+                           details: ["requestedAmount": amount])
         } else {
             do {
                 let newBalance = balance + amount
                 try await updateBalance(amount: newBalance)
-                print("Successfully added $\(amount). New balance: $\(newBalance)")
+                logBalanceChange(oldBalance: oldBalance, 
+                               newBalance: newBalance, 
+                               reason: "Added Real Funds",
+                               details: ["requestedAmount": amount])
             } catch {
                 print("Failed to add funds: \(error)")
                 throw error
@@ -89,8 +139,6 @@ class TipViewModel: ObservableObject {
             // Load sent tips
             let sentSnapshot = try await db.collection("tips")
                 .whereField("senderID", isEqualTo: userId)
-                .order(by: "timestamp", descending: true)
-                .limit(to: 20)
                 .getDocuments()
             
             self.sentTips = sentSnapshot.documents.compactMap { document in
@@ -115,8 +163,6 @@ class TipViewModel: ObservableObject {
             // Load received tips
             let receivedSnapshot = try await db.collection("tips")
                 .whereField("receiverID", isEqualTo: userId)
-                .order(by: "timestamp", descending: true)
-                .limit(to: 20)
                 .getDocuments()
             
             self.receivedTips = receivedSnapshot.documents.compactMap { document in
@@ -138,14 +184,8 @@ class TipViewModel: ObservableObject {
                           transactionID: transactionID)
             }
             
-            // Add received tips to balance in development mode
-            if paymentManager.isDevelopmentMode {
-                let totalReceived = receivedTips.reduce(0.0) { $0 + $1.amount }
-                if totalReceived > 0 {
-                    paymentManager.addTestMoney(amount: NSDecimalNumber(value: totalReceived).decimalValue)
-                    balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
-                }
-            }
+            // Remove unnecessary balance load in development mode
+            // The balance is already handled in processTip
             
         } catch {
             print("Error loading tip history: \(error)")
@@ -168,10 +208,18 @@ class TipViewModel: ObservableObject {
     
     @MainActor
     func loadBalance() async {
+        let oldBalance = balance
+        
         if paymentManager.isDevelopmentMode {
             let currentBalance = paymentManager.getCurrentBalance()
-            balance = NSDecimalNumber(decimal: currentBalance).doubleValue
-            print("Loaded development mode balance: \(balance)")
+            let newBalance = NSDecimalNumber(decimal: currentBalance).doubleValue
+            // Only update and log if there's an actual change
+            if abs(newBalance - oldBalance) > 0.001 {
+                balance = newBalance
+                logBalanceChange(oldBalance: oldBalance, 
+                               newBalance: balance, 
+                               reason: "Development Balance Load")
+            }
         } else {
             guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
             
@@ -180,17 +228,24 @@ class TipViewModel: ObservableObject {
                 let doc = try await userRef.getDocument()
                 
                 if !doc.exists {
-                    // Create user document if it doesn't exist
                     try await userRef.setData([
                         "balance": 0.0,
                         "createdAt": FieldValue.serverTimestamp(),
                         "updatedAt": FieldValue.serverTimestamp()
                     ])
                     balance = 0.0
+                    logBalanceChange(oldBalance: oldBalance, 
+                                   newBalance: 0.0, 
+                                   reason: "New User Account Created")
                 } else if let userBalance = doc.data()?["balance"] as? Double {
-                    balance = userBalance
+                    // Only update and log if there's an actual change
+                    if abs(userBalance - oldBalance) > 0.001 {
+                        balance = userBalance
+                        logBalanceChange(oldBalance: oldBalance, 
+                                       newBalance: userBalance, 
+                                       reason: "Production Balance Load")
+                    }
                 }
-                print("Loaded production mode balance: \(balance)")
             } catch {
                 print("Error loading balance: \(error)")
             }
@@ -235,18 +290,29 @@ class TipViewModel: ObservableObject {
     }
     
     private func processTip(amount: Double, receiverID: String, videoID: String) async throws {
+        let oldBalance = balance
+        
         guard let senderID = AuthenticationManager.shared.currentUser?.uid else {
             throw NSError(domain: "TipViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "User not logged in"])
         }
         
-        // Check balance
+        // Check if this is a self-tip
+        let isSelfTip = senderID == receiverID
+        
         if paymentManager.isDevelopmentMode {
             let decimalAmount = NSDecimalNumber(value: amount).decimalValue
             if !paymentManager.useBalance(amount: decimalAmount) {
                 throw PaymentError.insufficientFunds
             }
-            // Update local balance after successful tip
+            
+            // Always update balance, even for self-tips
             balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            
+            // For self-tips, immediately add the amount back
+            if isSelfTip {
+                paymentManager.addTestMoney(amount: decimalAmount)
+                balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            }
             
             // Create tip record
             let tipRef = db.collection("tips").document()
@@ -261,8 +327,17 @@ class TipViewModel: ObservableObject {
             
             try await tipRef.setData(tipData)
             
-            // Refresh tip history
-            await loadTipHistory()
+            // Log the sent tip
+            logBalanceChange(oldBalance: oldBalance, 
+                           newBalance: balance, 
+                           reason: "Sent Tip (Development)",
+                           details: ["receiverID": receiverID,
+                                   "videoID": videoID,
+                                   "tipAmount": amount,
+                                   "isSelfTip": isSelfTip])
+            
+            // Refresh tip history without loading balance
+            await loadTipHistoryWithoutBalance()
             return
         }
         
@@ -305,7 +380,7 @@ class TipViewModel: ObservableObject {
                         return nil
                     }
                     
-                    // Update balances
+                    // Always update balances, even for self-tips
                     transaction.updateData(["balance": senderBalance - amount], forDocument: self.db.collection("users").document(senderID))
                     transaction.updateData(["balance": receiverBalance + amount], forDocument: self.db.collection("users").document(receiverID))
                     
@@ -320,13 +395,84 @@ class TipViewModel: ObservableObject {
             })
             
             // Update local balance
-            balance -= amount
+            if isSelfTip {
+                // For self-tips, balance doesn't change
+                await loadBalance()
+            } else {
+                balance -= amount
+            }
             
-            // Refresh tip history
-            await loadTipHistory()
+            // Refresh tip history without loading balance
+            await loadTipHistoryWithoutBalance()
+            
+            // Log the tip
+            logBalanceChange(oldBalance: oldBalance, 
+                           newBalance: balance, 
+                           reason: "Sent Tip (Production)",
+                           details: ["receiverID": receiverID,
+                                   "videoID": videoID,
+                                   "tipAmount": amount,
+                                   "isSelfTip": isSelfTip])
         } catch {
             print("Error processing tip: \(error)")
             throw error
+        }
+    }
+    
+    // New method that loads tip history without affecting balance
+    private func loadTipHistoryWithoutBalance() async {
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
+        
+        do {
+            // Load sent tips
+            let sentSnapshot = try await db.collection("tips")
+                .whereField("senderID", isEqualTo: userId)
+                .getDocuments()
+            
+            self.sentTips = sentSnapshot.documents.compactMap { document in
+                guard let amount = document.data()["amount"] as? Double,
+                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
+                      let videoID = document.data()["videoID"] as? String,
+                      let senderID = document.data()["senderID"] as? String,
+                      let receiverID = document.data()["receiverID"] as? String,
+                      let transactionID = document.data()["transactionID"] as? String else {
+                    return nil
+                }
+                
+                return Tip(id: document.documentID,
+                          amount: amount,
+                          timestamp: timestamp,
+                          videoID: videoID,
+                          senderID: senderID,
+                          receiverID: receiverID,
+                          transactionID: transactionID)
+            }
+            
+            // Load received tips
+            let receivedSnapshot = try await db.collection("tips")
+                .whereField("receiverID", isEqualTo: userId)
+                .getDocuments()
+            
+            self.receivedTips = receivedSnapshot.documents.compactMap { document in
+                guard let amount = document.data()["amount"] as? Double,
+                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
+                      let videoID = document.data()["videoID"] as? String,
+                      let senderID = document.data()["senderID"] as? String,
+                      let receiverID = document.data()["receiverID"] as? String,
+                      let transactionID = document.data()["transactionID"] as? String else {
+                    return nil
+                }
+                
+                return Tip(id: document.documentID,
+                          amount: amount,
+                          timestamp: timestamp,
+                          videoID: videoID,
+                          senderID: senderID,
+                          receiverID: receiverID,
+                          transactionID: transactionID)
+            }
+        } catch {
+            print("Error loading tip history: \(error)")
         }
     }
 }

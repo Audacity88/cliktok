@@ -27,11 +27,14 @@ struct TipHistoryRow: View {
 }
 
 struct WalletView: View {
-    @StateObject private var tipViewModel = TipViewModel()
-    @State private var showError = false
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var viewModel = TipViewModel.shared
+    @State private var selectedAmount: Double = 1.00
+    @State private var showingAddFunds = false
+    @State private var showingTipHistory = false
+    @State private var showingError = false
     @State private var errorMessage = ""
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         NavigationView {
@@ -48,15 +51,15 @@ struct WalletView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(colorScheme == .dark ? Color.black : Color.white, for: .navigationBar)
-            .alert("Error", isPresented: $showError) {
+            .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
             }
             .onAppear {
                 Task {
-                    await tipViewModel.loadBalance()
-                    await tipViewModel.loadTipHistory()
+                    await viewModel.loadBalance()
+                    await viewModel.loadTipHistory()
                 }
             }
         }
@@ -64,16 +67,16 @@ struct WalletView: View {
     
     private var balanceSection: some View {
         Section {
-            BalanceRow(balance: tipViewModel.balance)
+            BalanceRow(balance: viewModel.balance)
         }
     }
     
     private var addFundsSection: some View {
         Section("Add Funds") {
-            ForEach(tipViewModel.tipAmounts, id: \.self) { amount in
+            ForEach(viewModel.tipAmounts, id: \.self) { amount in
                 AddFundsRow(
                     amount: amount,
-                    isPurchasing: tipViewModel.isPurchasing
+                    isPurchasing: viewModel.isPurchasing
                 ) {
                     handleAddFunds(amount: amount)
                 }
@@ -83,11 +86,11 @@ struct WalletView: View {
     
     private var receivedTipsSection: some View {
         Section("Tips Received") {
-            if tipViewModel.receivedTips.isEmpty {
+            if viewModel.receivedTips.isEmpty {
                 Text("No tips received")
                     .foregroundColor(.secondary)
             } else {
-                ForEach(tipViewModel.receivedTips) { tip in
+                ForEach(viewModel.receivedTips) { tip in
                     TipHistoryRow(tip: tip, isReceived: true)
                 }
             }
@@ -96,11 +99,11 @@ struct WalletView: View {
     
     private var sentTipsSection: some View {
         Section("Tips Sent") {
-            if tipViewModel.sentTips.isEmpty {
+            if viewModel.sentTips.isEmpty {
                 Text("No tips sent")
                     .foregroundColor(.secondary)
             } else {
-                ForEach(tipViewModel.sentTips) { tip in
+                ForEach(viewModel.sentTips) { tip in
                     TipHistoryRow(tip: tip, isReceived: false)
                 }
             }
@@ -110,10 +113,10 @@ struct WalletView: View {
     private func handleAddFunds(amount: Double) {
         Task {
             do {
-                try await tipViewModel.addFunds(amount)
+                try await viewModel.addFunds(amount)
                 dismiss()
             } catch {
-                showError = true
+                showingError = true
                 errorMessage = error.localizedDescription
             }
         }

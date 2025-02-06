@@ -102,8 +102,8 @@ actor VideoAssetLoader {
 }
 
 struct VideoPlayerView: View {
-    @StateObject private var tipViewModel = TipViewModel()
     @StateObject private var viewModel = VideoFeedViewModel()
+    @StateObject private var tipViewModel = TipViewModel.shared
     @Environment(\.dismiss) private var dismiss
     let video: Video
     let showBackButton: Bool
