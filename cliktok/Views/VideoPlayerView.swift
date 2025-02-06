@@ -1,11 +1,13 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import FirebaseFirestore
 
 #if os(iOS)
 struct VideoPlayerView: View {
     @StateObject private var tipViewModel = TipViewModel()
     @StateObject private var viewModel = VideoFeedViewModel()
+    @Environment(\.dismiss) private var dismiss
     let video: Video
     @State private var player: AVPlayer?
     @State private var isMuted = false
@@ -17,6 +19,7 @@ struct VideoPlayerView: View {
     @State private var totalTips = 0
     @State private var showTipBubble = false
     @State private var showTippedText = false
+    @State private var showTipSheet = false
     
     var body: some View {
         GeometryReader { geometry in
@@ -30,173 +33,206 @@ struct VideoPlayerView: View {
                         .edgesIgnoringSafeArea(.all)
                 }
                 
-                // Overlay Controls
+                // Back Button
                 VStack {
+                    HStack {
+                        Button(action: {
+                            cleanupPlayer()
+                            dismiss()
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .font(.title2)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Circle().fill(Color.black.opacity(0.5)))
+                        }
+                        .padding(.leading)
+                        Spacer()
+                    }
+                    .padding(.top, 50)
+                    
                     Spacer()
                     
-                    // Video info and controls
-                    HStack(alignment: .bottom, spacing: 16) {
-                        // Video details
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(video.caption)
-                                .foregroundColor(.white)
-                                .font(.system(size: 16, weight: .semibold))
-                                .shadow(radius: 2)
-                                .multilineTextAlignment(.leading)
-                            
-                            if !video.hashtags.isEmpty {
-                                Text(video.hashtags.joined(separator: " "))
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 14))
-                                    .shadow(radius: 2)
-                            }
-                        }
-                        .frame(maxWidth: geometry.size.width * 0.7, alignment: .leading)
-                        
+                    // Overlay Controls
+                    VStack {
                         Spacer()
                         
-                        // Control buttons
-                        VStack(spacing: 24) {
-                            // Like/Tip Button
-                            VStack(spacing: 20) {
-                                ZStack(alignment: .center) {
-                                    // Container for fixed positioning
-                                    VStack {
-                                        Spacer()
-                                            .frame(height: 32) // Match heart height
+                        // Video info and controls
+                        HStack(alignment: .bottom, spacing: 16) {
+                            // Video details
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(video.caption)
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .shadow(radius: 2)
+                                    .multilineTextAlignment(.leading)
+                                
+                                if !video.hashtags.isEmpty {
+                                    Text(video.hashtags.map { "#\($0)" }.joined(separator: " "))
+                                        .foregroundColor(.white.opacity(0.9))
+                                        .font(.system(size: 14, weight: .medium))
+                                        .shadow(radius: 2)
+                                }
+                                
+                                if let creator = viewModel.getCreator(for: video) {
+                                    HStack(alignment: .center, spacing: 10) {
+                                        NavigationLink(destination: ProfileView(userId: video.userID)) {
+                                            ProfileImageView(imageURL: creator.profileImageURL, size: 40)
+                                        }
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(creator.displayName)
+                                                .font(.headline)
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 2)
+                                        }
                                     }
-                                    .frame(width: 100, height: 80) // Fixed container size
-                                    
-                                    // Heart button
-                                    VStack(spacing: 4) {
-                                        Button(action: {
-                                            Task {
-                                                do {
-                                                    guard let videoId = video.id else { return }
-                                                    try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
-                                                    totalTips += 1
-                                                    
-                                                    // Show both animations
-                                                    withAnimation {
-                                                        showTipBubble = true
-                                                        showTippedText = true
+                                    .padding(.top, 8)
+                                } else {
+                                    ProgressView()
+                                        .frame(width: 40, height: 40)
+                                        .padding(.top, 8)
+                                }
+                            }
+                            .frame(maxWidth: geometry.size.width * 0.7, alignment: .leading)
+                            
+                            Spacer()
+                            
+                            // Control buttons
+                            VStack(spacing: 24) {
+                                // Like/Tip Button
+                                VStack(spacing: 20) {
+                                    ZStack(alignment: .center) {
+                                        // Container for fixed positioning
+                                        VStack {
+                                            Spacer()
+                                                .frame(height: 32) // Match heart height
+                                        }
+                                        .frame(width: 100, height: 80) // Fixed container size
+                                        
+                                        // Heart button
+                                        VStack(spacing: 4) {
+                                            Button(action: {
+                                                Task {
+                                                    do {
+                                                        guard let videoId = video.id else { return }
+                                                        try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
+                                                        totalTips += 1
+                                                        
+                                                        // Show both animations
+                                                        withAnimation {
+                                                            showTipBubble = true
+                                                            showTippedText = true
+                                                        }
+                                                        
+                                                        // Hide animations after delay
+                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                            showTipBubble = false
+                                                            showTippedText = false
+                                                        }
+                                                    } catch PaymentError.insufficientFunds {
+                                                        showAddFundsAlert = true
+                                                    } catch {
+                                                        showError = true
+                                                        errorMessage = error.localizedDescription
                                                     }
-                                                    
-                                                    // Hide animations after delay
-                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                                        showTipBubble = false
-                                                        showTippedText = false
-                                                    }
-                                                } catch PaymentError.insufficientFunds {
-                                                    showAddFundsAlert = true
-                                                } catch {
-                                                    showError = true
-                                                    errorMessage = error.localizedDescription
                                                 }
-                                            }
-                                        }) {
-                                            VStack(spacing: 4) {
-                                                Image(systemName: "heart\(totalTips > 0 ? ".fill" : "")")
-                                                    .resizable()
-                                                    .frame(width: 32, height: 32)
-                                                    .foregroundColor(totalTips > 0 ? .red : .white)
-                                                    .shadow(radius: 2)
-                                                
-                                                if totalTips > 0 {
-                                                    Text("\(totalTips)¢")
-                                                        .font(.system(size: 12, weight: .bold))
-                                                        .foregroundColor(.white)
-                                                        .shadow(radius: 1)
+                                            }) {
+                                                VStack(spacing: 4) {
+                                                    Image(systemName: "heart\(totalTips > 0 ? ".fill" : "")")
+                                                        .resizable()
+                                                        .frame(width: 32, height: 32)
+                                                        .foregroundColor(totalTips > 0 ? .red : .white)
+                                                        .shadow(radius: 2)
+                                                    
+                                                    if totalTips > 0 {
+                                                        Text("\(totalTips)¢")
+                                                            .font(.system(size: 12, weight: .bold))
+                                                            .foregroundColor(.white)
+                                                            .shadow(radius: 1)
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                    .offset(x: 40, y: 35)
-                                    
-                                    // Tipped text overlay
-                                    if showTippedText {
-                                        Text("Tipped!")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.white)
-                                            .shadow(radius: 1)
-                                            .frame(width: 100)
-                                            .offset(x: 40, y: 27)
-                                            .transition(.opacity)
-                                    }
-                                    
-                                    // Tip bubble
-                                    if showTipBubble {
-                                        TipBubbleView()
-                                            .offset(x: 60, y: -30)
+                                        .offset(x: 40, y: 35)
+                                        
+                                        // Tipped text overlay
+                                        if showTippedText {
+                                            Text("Tipped!")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(.white)
+                                                .shadow(radius: 1)
+                                                .frame(width: 100)
+                                                .offset(x: 40, y: 27)
+                                                .transition(.opacity)
+                                        }
+                                        
+                                        // Tip bubble
+                                        if showTipBubble {
+                                            TipBubbleView()
+                                                .offset(x: 60, y: -30)
+                                        }
                                     }
                                 }
+                                .disabled(tipViewModel.isProcessing)
+                                
+                                // Mute Button
+                                Button(action: toggleMute) {
+                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                        .font(.system(size: 30))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                }
+                                .offset(x: 40, y: 10) 
+                                
+                                // View Count
+                                VStack(spacing: 4) {
+                                    Image(systemName: "eye.fill")
+                                        .font(.system(size: 30))
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                    Text("\(video.views)")
+                                        .foregroundColor(.white)
+                                        .font(.system(size: 14))
+                                        .shadow(radius: 2)
+                                }
+                                .offset(x: 40, y: 10) 
                             }
-                            .disabled(tipViewModel.isProcessing)
-                            
-                            // Mute Button
-                            Button(action: toggleMute) {
-                                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.white)
-                                    .shadow(radius: 2)
-                            }
-                            .offset(x: 40, y: 10) 
-                            
-                            // View Count
-                            VStack(spacing: 4) {
-                                Image(systemName: "eye.fill")
-                                    .font(.system(size: 30))
-                                    .foregroundColor(.white)
-                                    .shadow(radius: 2)
-                                Text("\(video.views)")
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 14))
-                                    .shadow(radius: 2)
-                            }
-                            .offset(x: 40, y: 10) 
+                            .padding(.trailing)
                         }
-                        .padding(.trailing)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 30)
                     }
-                    .padding(.bottom, 44)
-                    .padding(.horizontal)
                 }
             }
+            .navigationBarHidden(true)
+            .edgesIgnoringSafeArea(.all)
             .onAppear {
                 print("VideoPlayerView appeared for video: \(video.id)")
                 loadAndPlayVideo()
-                
-                // Load balance in development mode only
-                if PaymentManager.shared.isDevelopmentMode {
-                    Task {
-                        await tipViewModel.loadBalance()
-                    }
+                Task {
+                    await viewModel.fetchCreators(for: [video])
                 }
             }
             .onDisappear {
-                print("VideoPlayerView disappeared for video: \(video.id)")
                 cleanupPlayer()
             }
-        }
-        .alert("Insufficient Balance", isPresented: $showAddFundsAlert) {
-            Button("Add Funds") {
-                Task {
-                    do {
-                        try await tipViewModel.addFunds(1.00) // Add $1.00
-                        await tipViewModel.loadBalance()
-                    } catch {
-                        showError = true
-                        errorMessage = error.localizedDescription
-                    }
+            .alert("Add Funds", isPresented: $showAddFundsAlert) {
+                Button("Add Funds") {
+                    showWallet = true
                 }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You need more funds to tip this video.")
             }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Your balance is too low. Would you like to add more funds?")
-        }
-        .alert("Error", isPresented: $showError) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(errorMessage)
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(errorMessage)
+            }
+            .sheet(isPresented: $showWallet) {
+                WalletView()
+            }
         }
     }
     
@@ -242,8 +278,6 @@ struct VideoPlayerView: View {
     }
     
     private func cleanupPlayer() {
-        print("Cleaning up player for video: \(video.id)")
-        NotificationCenter.default.removeObserver(self)
         player?.pause()
         player = nil
     }
