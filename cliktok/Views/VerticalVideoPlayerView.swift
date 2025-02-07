@@ -2,16 +2,22 @@ import SwiftUI
 
 struct VerticalVideoPlayerView: View {
     let videos: [Video]
-    let showBackButton: Bool
-    @State private var currentIndex = 0
+    let startingVideo: Video
+    var showBackButton: Bool
+    @Binding var clearSearchOnDismiss: Bool
+    @State private var currentIndex: Int
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
-    @Binding var clearSearchOnDismiss: Bool
     
-    init(videos: [Video], showBackButton: Bool, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
+    init(videos: [Video], startingVideo: Video, showBackButton: Bool, clearSearchOnDismiss: Binding<Bool>) {
         self.videos = videos
+        self.startingVideo = startingVideo
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
+        
+        // Find the index of the starting video
+        let startIndex = videos.firstIndex(where: { $0.id == startingVideo.id }) ?? 0
+        self._currentIndex = State(initialValue: startIndex)
     }
     
     var body: some View {
@@ -43,6 +49,19 @@ struct VerticalVideoPlayerView: View {
                     )
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea()
+                }
+            }
+        }
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    clearSearchOnDismiss = true
+                    dismiss()
+                }) {
+                    Image(systemName: "chevron.left")
+                        .foregroundColor(.white)
+                        .imageScale(.large)
                 }
             }
         }

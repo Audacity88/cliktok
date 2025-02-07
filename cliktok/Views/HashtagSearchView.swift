@@ -6,6 +6,8 @@ struct HashtagSearchView: View {
     @State private var isSearching = false
     @State private var hasSearchResults = false
     @FocusState private var isSearchFocused: Bool
+    @State private var keepKeyboardUp = true
+    @Environment(\.dismiss) private var dismiss
     @Binding var clearSearchOnDismiss: Bool
     
     init(clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
@@ -14,93 +16,124 @@ struct HashtagSearchView: View {
     
     var body: some View {
         NavigationView {
-            VStack {
-                // Search bar with HashtagTextField
-                HStack {
-                    HashtagTextField(text: $searchText, placeholder: "Search hashtags...")
-                        .focused($isSearchFocused)
-                        .onChange(of: searchText) { oldValue, newValue in
-                            if newValue.isEmpty {
-                                feedViewModel.clearSearch()
-                                hasSearchResults = false
-                            } else {
-                                Task {
-                                    await performSearch()
+            ZStack(alignment: .top) {
+                Color(uiColor: .systemBackground)
+                    .edgesIgnoringSafeArea(.all)
+                
+                VStack(spacing: 0) {
+                    // Search bar with HashtagTextField
+                    HStack {
+                        HashtagTextField(text: $searchText, placeholder: "Search hashtags...", singleTagMode: true, onTagsChanged: { tags in
+                            Task {
+                                if tags.isEmpty {
+                                    feedViewModel.clearSearch()
+                                    hasSearchResults = false
+                                } else {
+                                    isSearching = true
+                                    await performSearch(tags: tags)
+                                    isSearching = false
                                 }
                             }
+                        })
+                        .focused($isSearchFocused)
+                    }
+                    .padding()
+                    
+                    // Content area
+                    ZStack {
+                        if isSearching {
+                            ProgressView()
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if let error = feedViewModel.searchError {
+                            Text("Error: \(error.localizedDescription)")
+                                .foregroundColor(.red)
+                                .padding()
+                        } else if searchText.isEmpty && !hasSearchResults {
+                            VStack {
+                                Spacer()
+                                Text("Try searching for #funny, #dance, or #music")
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                                Spacer()
+                            }
+                        } else if feedViewModel.searchResults.isEmpty && !searchText.isEmpty {
+                            VStack {
+                                Spacer()
+                                Text("No videos found")
+                                    .foregroundColor(.secondary)
+                                    .padding()
+                                Spacer()
+                            }
+                        } else {
+                            VideoGridView(videos: feedViewModel.searchResults)
                         }
-                }
-                .padding()
-                
-                if feedViewModel.isSearching {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = feedViewModel.searchError {
-                    Text("Error: \(error.localizedDescription)")
-                        .foregroundColor(.red)
-                        .padding()
-                } else if searchText.isEmpty && !hasSearchResults {
-                    // Show trending or suggested hashtags
-                    Text("Try searching for #funny, #dance, or #music")
-                        .foregroundColor(.gray)
-                        .padding()
-                } else if feedViewModel.searchResults.isEmpty && !searchText.isEmpty {
-                    Text("No videos found")
-                        .foregroundColor(.gray)
-                        .padding()
-                } else {
-                    // Show search results in a grid
-                    VideoGridView(videos: feedViewModel.searchResults, showBackButton: true, clearSearchOnDismiss: $clearSearchOnDismiss)
-                        .padding(.horizontal, 1)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(true)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if isSearchFocused || hasSearchResults {
-                        Button(action: {
-                            if hasSearchResults {
-                                searchText = ""
-                                feedViewModel.clearSearch()
-                                hasSearchResults = false
-                            }
+                    Button(action: {
+                        if hasSearchResults {
+                            searchText = ""
+                            feedViewModel.clearSearch()
+                            hasSearchResults = false
+                            keepKeyboardUp = true
+                            isSearchFocused = true
+                        } else {
+                            keepKeyboardUp = false
                             isSearchFocused = false
-                        }) {
-                            Image(systemName: "chevron.left")
-                                .foregroundColor(.white)
+                            dismiss()
                         }
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .foregroundColor(.primary)
                     }
                 }
             }
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.black, for: .navigationBar)
+            .onAppear {
+                keepKeyboardUp = true
+                isSearchFocused = true
+            }
+            .onChange(of: keepKeyboardUp) { oldValue, newValue in
+                if newValue {
+                    isSearchFocused = true
+                }
+            }
             .onChange(of: clearSearchOnDismiss) { oldValue, newValue in
                 if newValue {
                     searchText = ""
                     feedViewModel.clearSearch()
                     hasSearchResults = false
                     clearSearchOnDismiss = false
+                    keepKeyboardUp = true
+                    isSearchFocused = true
                 }
+            }
+        }
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            if keepKeyboardUp {
+                isSearchFocused = true
             }
         }
     }
     
-    private func performSearch() async {
-        guard !searchText.isEmpty else {
+    private func performSearch(tags: [String]) async {
+        guard !tags.isEmpty else {
             feedViewModel.clearSearch()
             hasSearchResults = false
             return
         }
         
-        // Get all hashtags from the search text
-        let hashtags = searchText.split(separator: " ").map(String.init)
+        hasSearchResults = true
         
         // Search for each hashtag
-        for hashtag in hashtags {
+        for hashtag in tags {
             await feedViewModel.searchVideos(hashtag: hashtag)
         }
-        
-        hasSearchResults = true
     }
 }

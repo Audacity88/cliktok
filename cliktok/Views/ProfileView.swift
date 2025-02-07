@@ -26,9 +26,15 @@ struct ProfileView: View {
         checkIsCurrentUser() && Auth.auth().currentUser?.isAnonymous != true
     }
     
+    private var isViewingOwnProfileAsGuest: Bool {
+        checkIsCurrentUser() && Auth.auth().currentUser?.isAnonymous == true
+    }
+    
     var body: some View {
         Group {
-            if let user = checkIsCurrentUser() ? viewModel.currentUser : viewModel.viewedUser {
+            if isViewingOwnProfileAsGuest {
+                GuestProfileView()
+            } else if let user = checkIsCurrentUser() ? viewModel.currentUser : viewModel.viewedUser {
                 if isEditing && !canEdit {
                     GuestRestrictedView()
                 } else {
@@ -50,12 +56,15 @@ struct ProfileView: View {
             }
         }
         .task {
-            if let userId = userId {
-                await viewModel.fetchUser(userId: userId)
-                await viewModel.fetchUserVideos(for: userId)
-            } else {
-                await viewModel.fetchCurrentUser()
-                await viewModel.fetchUserVideos()
+            // Fetch user data if viewing someone else's profile or if not an anonymous user
+            if !isViewingOwnProfileAsGuest {
+                if let userId = userId {
+                    await viewModel.fetchUser(userId: userId)
+                    await viewModel.fetchUserVideos(for: userId)
+                } else {
+                    await viewModel.fetchCurrentUser()
+                    await viewModel.fetchUserVideos()
+                }
             }
         }
         .onChange(of: selectedItem) { newItem in
@@ -74,6 +83,42 @@ struct ProfileView: View {
     }
 }
 
+struct GuestProfileView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .frame(width: 100, height: 100)
+                .foregroundColor(.gray)
+            
+            Text("Guest User")
+                .font(.title2)
+                .bold()
+            
+            Text("Create an account to access all features")
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Button(action: {
+                try? AuthenticationManager.shared.signOut()
+            }) {
+                Text("Sign Out")
+                    .foregroundColor(.red)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(10)
+            }
+            .padding(.horizontal)
+            
+            Spacer()
+        }
+        .padding(.top, 50)
+        .navigationTitle("Profile")
+    }
+}
+
 struct ProfileContentView: View {
     let user: User
     let isCurrentUser: Bool
@@ -84,83 +129,98 @@ struct ProfileContentView: View {
     @Binding var selectedItem: PhotosPickerItem?
     @Binding var selectedImageData: Data?
     @ObservedObject var viewModel: UserViewModel
-    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .center, spacing: 20) {
-                // Profile Image
-                if isCurrentUser {
-                    PhotosPicker(selection: $selectedItem, matching: .images) {
-                        ProfileImageView(imageURL: user.profileImageURL, size: 100)
-                    }
-                } else {
-                    ProfileImageView(imageURL: user.profileImageURL, size: 100)
-                }
-                
-                if isEditing {
-                    ProfileEditForm(
-                        displayName: $displayName,
-                        bio: $bio,
-                        isEditing: $isEditing,
-                        viewModel: viewModel
-                    )
-                } else {
-                    ProfileInfoView(
-                        user: user,
-                        isCurrentUser: isCurrentUser,
-                        canEdit: canEdit,
-                        isEditing: $isEditing,
-                        viewModel: viewModel
-                    )
-                }
-                
-                // User's Videos Section
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Videos")
-                        .font(.headline)
-                        .padding(.horizontal)
-                    
-                    if !viewModel.userVideos.isEmpty {
-                        VideoGridView(videos: viewModel.userVideos, showBackButton: true)
-                            .environmentObject(feedViewModel)
+            VStack(spacing: 20) {
+                // Profile Header
+                VStack(spacing: 16) {
+                    // Profile Image
+                    if let profileImageURL = user.profileImageURL,
+                       let url = URL(string: profileImageURL) {
+                        AsyncImage(url: url) { image in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 100, height: 100)
+                                .clipShape(Circle())
+                        } placeholder: {
+                            Circle()
+                                .fill(Color.gray.opacity(0.3))
+                                .frame(width: 100, height: 100)
+                        }
                     } else {
-                        Text("No videos yet")
-                            .foregroundColor(.gray)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding()
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .frame(width: 100, height: 100)
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 60, height: 60)
+                                    .foregroundColor(.gray)
+                            )
                     }
-                }
-            }
-            .padding(.top)
-        }
-        .navigationTitle(isCurrentUser ? "Profile" : user.displayName)
-        .navigationBarItems(
-            trailing: HStack {
-                if isCurrentUser {
-                    if canEdit {
-                        Button(isEditing ? "Cancel" : "Edit") {
-                            if isEditing {
-                                isEditing = false
-                            } else {
-                                displayName = user.displayName
-                                bio = user.bio
-                                isEditing = true
+                    
+                    if isEditing {
+                        ProfileEditForm(
+                            displayName: $displayName,
+                            bio: $bio,
+                            isEditing: $isEditing,
+                            viewModel: viewModel
+                        )
+                    } else {
+                        // User Info
+                        VStack(spacing: 8) {
+                            Text(user.username)
+                                .font(.title2)
+                                .fontWeight(.bold)
+                            
+                            if !user.displayName.isEmpty && user.displayName != user.username {
+                                Text(user.displayName)
+                                    .font(.headline)
+                            }
+                            
+                            if !user.bio.isEmpty {
+                                Text(user.bio)
+                                    .font(.body)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
                             }
                         }
                     }
-                    
-                    if !isEditing {
-                        Button(action: {
-                            try? AuthenticationManager.shared.signOut()
-                        }) {
-                            Text("Sign Out")
-                                .foregroundColor(.red)
+                }
+                .padding()
+                
+                // Edit Profile Button
+                if canEdit && !isEditing {
+                    Button(action: {
+                        if isEditing {
+                            isEditing = false
+                        } else {
+                            displayName = user.displayName
+                            bio = user.bio
+                            isEditing = true
                         }
+                    }) {
+                        Text(isEditing ? "Cancel" : "Edit Profile")
+                            .foregroundColor(.white)
+                            .frame(width: 200)
+                            .padding()
+                            .background(Color.blue)
+                            .cornerRadius(8)
                     }
                 }
+                
+                // Videos Grid
+                if !viewModel.userVideos.isEmpty {
+                    VideoGridView(videos: viewModel.userVideos, showBackButton: false)
+                } else {
+                    ProgressView()
+                        .padding()
+                }
             }
-        )
+        }
     }
 }
 

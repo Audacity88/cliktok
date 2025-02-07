@@ -9,7 +9,6 @@ class VideoFeedViewModel: ObservableObject {
     @Published var error: Error?
     @Published var videoCreators: [String: User] = [:]
     @Published var searchResults: [Video] = []
-    @Published var isSearching = false
     @Published var searchError: Error?
     
     private var lastDocument: DocumentSnapshot?
@@ -153,16 +152,9 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func searchVideos(hashtag: String) async {
-        isSearching = true
-        searchError = nil
-        
         do {
-            // Remove spaces and convert to lowercase
-            let searchTerm = hashtag.lowercased().replacingOccurrences(of: " ", with: "")
-            
             let snapshot = try await db.collection("videos")
-                .whereField("hashtags", arrayContains: searchTerm)
-                .order(by: "created_at", descending: true)
+                .whereField("hashtags", arrayContains: hashtag)
                 .limit(to: 50)
                 .getDocuments()
             
@@ -170,20 +162,18 @@ class VideoFeedViewModel: ObservableObject {
                 try? document.data(as: Video.self)
             }
             
-            // Fetch creators for search results
+            // Fetch creators for these videos
             await fetchCreators(for: searchResults)
             
-            isSearching = false
         } catch {
             searchError = error
-            isSearching = false
+            print("Error searching videos: \(error)")
         }
     }
     
     func clearSearch() {
         searchResults = []
         searchError = nil
-        isSearching = false
     }
     
     @MainActor

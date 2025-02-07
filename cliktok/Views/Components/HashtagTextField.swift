@@ -8,11 +8,13 @@ struct HashtagTextField: View {
     @State private var selectedTag: String?
     @FocusState private var isInputFocused: Bool
     var singleTagMode: Bool = false // For search functionality
+    var onTagsChanged: (([String]) -> Void)?
     
-    init(text: Binding<String>, placeholder: String, singleTagMode: Bool = false) {
+    init(text: Binding<String>, placeholder: String, singleTagMode: Bool = false, onTagsChanged: (([String]) -> Void)? = nil) {
         self._text = text
         self.placeholder = placeholder
         self.singleTagMode = singleTagMode
+        self.onTagsChanged = onTagsChanged
         
         // Initialize tags from text
         let initialTags = text.wrappedValue
@@ -28,10 +30,11 @@ struct HashtagTextField: View {
             HStack {
                 if singleTagMode {
                     Image(systemName: "magnifyingglass")
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                 }
                 
                 TextField(placeholder, text: $currentInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
                     .focused($isInputFocused)
                     .onChange(of: currentInput) { oldValue, newValue in
                         // Convert to lowercase and remove spaces
@@ -56,7 +59,9 @@ struct HashtagTextField: View {
                                 currentInput = ""
                             }
                             // Keep keyboard focused
-                            isInputFocused = true
+                            DispatchQueue.main.async {
+                                isInputFocused = true
+                            }
                         }
                     }
                     .onSubmit {
@@ -71,7 +76,9 @@ struct HashtagTextField: View {
                             currentInput = ""
                             updateText()
                             // Keep keyboard focused
-                            isInputFocused = true
+                            DispatchQueue.main.async {
+                                isInputFocused = true
+                            }
                         }
                     }
                 
@@ -81,10 +88,12 @@ struct HashtagTextField: View {
                         tags.removeAll()
                         updateText()
                         // Keep keyboard focused
-                        isInputFocused = true
+                        DispatchQueue.main.async {
+                            isInputFocused = true
+                        }
                     }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary)
                     }
                 }
             }
@@ -101,79 +110,72 @@ struct HashtagTextField: View {
                                     tags.removeAll()
                                     updateText()
                                 } else {
-                                    // In multi-tag mode, handle selection/deletion
                                     handleTagTap(tag)
                                 }
-                                // Keep keyboard focused after tag interaction
-                                isInputFocused = true
+                                // Keep keyboard focused
+                                DispatchQueue.main.async {
+                                    isInputFocused = true
+                                }
                             }
                     }
                 }
                 .padding(.vertical, 4)
-                .animation(.easeInOut(duration: 0.2), value: currentInput)
             }
+            .frame(height: tags.isEmpty ? 0 : nil)
+        }
+        .onChange(of: tags) { oldValue, newValue in
+            updateText()
+            onTagsChanged?(newValue)
         }
         .onChange(of: text) { oldValue, newValue in
-            // Update tags when text changes externally
-            let newTags = newValue
-                .split(separator: " ")
-                .map { String($0).replacingOccurrences(of: " ", with: "") }
-                .filter { !$0.isEmpty }
-            
-            if singleTagMode {
-                // In single tag mode, only keep the last tag
-                tags = newTags.suffix(1)
-            } else {
-                tags = newTags
+            if newValue.isEmpty && !tags.isEmpty {
+                tags.removeAll()
+                currentInput = ""
+                onTagsChanged?([])
             }
+        }
+    }
+    
+    private func updateText() {
+        withAnimation {
+            text = tags.joined(separator: " ")
         }
     }
     
     private func handleTagTap(_ tag: String) {
         if selectedTag == tag {
             // Second tap on the same tag - delete it
-            tags.removeAll { $0 == tag }
-            selectedTag = nil
-            updateText()
+            withAnimation {
+                tags.removeAll { $0 == tag }
+                selectedTag = nil
+            }
         } else {
             // First tap - select the tag
-            selectedTag = tag
+            withAnimation {
+                selectedTag = tag
+            }
         }
-    }
-    
-    private func updateText() {
-        text = tags.joined(separator: " ")
+        updateText()
+        // Keep keyboard focused
+        DispatchQueue.main.async {
+            isInputFocused = true
+        }
     }
 }
 
 // Extracted TagPillView for reusability and consistency
 struct TagPillView: View {
     let tag: String
-    var isSelected: Bool = false
-    var isPreview: Bool = false
+    var isSelected: Bool
     
     var body: some View {
-        HStack(spacing: 4) {
-            Text("#\(tag)")
-                .foregroundColor(.white)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(backgroundColor)
-        )
-        .opacity(isPreview ? 0.7 : 1.0)
-    }
-    
-    private var backgroundColor: Color {
-        if isPreview {
-            return Color.gray.opacity(0.3)
-        } else if isSelected {
-            return Color.blue.opacity(0.6)
-        } else {
-            return Color.blue.opacity(0.3)
-        }
+        Text("#\(tag)")
+            .font(.system(.subheadline, design: .rounded))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.2))
+            .foregroundColor(isSelected ? .white : .primary)
+            .clipShape(Capsule())
     }
 }
 
@@ -186,4 +188,4 @@ struct TagPillView: View {
             HashtagTextField(text: .constant("funny"), placeholder: "Search hashtags...", singleTagMode: true)
         }
     }
-} 
+}

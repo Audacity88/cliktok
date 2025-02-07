@@ -1,38 +1,40 @@
 import SwiftUI
-import AVKit
 import FirebaseAuth
 
 struct VideoGridView: View {
     let videos: [Video]
-    let showBackButton: Bool
+    var showBackButton: Bool = false
+    @Binding var clearSearchOnDismiss: Bool
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedVideo: Video?
     @State private var showEditSheet = false
     @State private var videoToEdit: Video?
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
-    @Binding var clearSearchOnDismiss: Bool
     
+    private let spacing: CGFloat = 1
     private let columns = [
         GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
         GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
         GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1)
     ]
     
-    init(videos: [Video], showBackButton: Bool, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
+    init(videos: [Video], showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
         self.videos = videos
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
     }
     
     var body: some View {
-        GeometryReader { geometry in
-            let itemWidth = (geometry.size.width - 4) / 3 // 4 = 2 spacing + 2 padding
-            
-            LazyVGrid(columns: columns, spacing: 1) {
+        ScrollView {
+            LazyVGrid(columns: columns, spacing: spacing) {
                 ForEach(videos) { video in
-                    ZStack {
+                    GeometryReader { geometry in
+                        let width = geometry.size.width
+                        let height = width * (4/3)
+                        
                         VideoThumbnailView(video: video)
                             .aspectRatio(9/16, contentMode: .fill)
-                            .frame(width: itemWidth, height: itemWidth * (4/3))
+                            .frame(width: width, height: height)
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -56,17 +58,35 @@ struct VideoGridView: View {
                                 }
                             }
                     }
+                    .aspectRatio(3/4, contentMode: .fit)
                 }
             }
-            .padding(.horizontal, 1)
+            .padding(.horizontal, spacing)
         }
-        .frame(maxWidth: .infinity)
-        .fullScreenCover(item: $selectedVideo) { video in
-            NavigationView {
-                VerticalVideoPlayerView(videos: videos, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
-                    .environmentObject(feedViewModel)
-                    .edgesIgnoringSafeArea(.all)
+        .navigationBarBackButtonHidden(showBackButton)
+        .toolbar {
+            if showBackButton {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        clearSearchOnDismiss = true
+                        dismiss()
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .foregroundColor(.primary)
+                    }
+                }
             }
+        }
+        .fullScreenCover(item: $selectedVideo) { video in
+            VerticalVideoPlayerView(
+                videos: videos,
+                startingVideo: video,
+                showBackButton: true,
+                clearSearchOnDismiss: $clearSearchOnDismiss
+            )
+            .environmentObject(feedViewModel)
+            .edgesIgnoringSafeArea(.all)
+            .interactiveDismissDisabled()
         }
         .sheet(isPresented: $showEditSheet) {
             if let video = videoToEdit {
