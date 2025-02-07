@@ -73,24 +73,21 @@ struct HashtagSearchView: View {
             }
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
-            .navigationBarBackButtonHidden(true)
+            .navigationBarBackButtonHidden(isSearchFocused || hasSearchResults)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        if hasSearchResults {
+                if isSearchFocused || hasSearchResults {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button(action: {
                             searchText = ""
                             feedViewModel.clearSearch()
                             hasSearchResults = false
-                            keepKeyboardUp = true
-                            isSearchFocused = true
-                        } else {
                             keepKeyboardUp = false
                             isSearchFocused = false
                             dismiss()
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .foregroundColor(.primary)
                         }
-                    }) {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(.primary)
                     }
                 }
             }

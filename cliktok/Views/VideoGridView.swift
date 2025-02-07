@@ -84,6 +84,7 @@ struct VideoGridView: View {
                 showBackButton: true,
                 clearSearchOnDismiss: $clearSearchOnDismiss
             )
+            .background(TransparentBackground())
             .environmentObject(feedViewModel)
             .edgesIgnoringSafeArea(.all)
             .interactiveDismissDisabled()
@@ -132,4 +133,16 @@ struct VideoThumbnailView: View {
                 .shadow(radius: 2)
         }
     }
+}
+
+struct TransparentBackground: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        DispatchQueue.main.async {
+            view.superview?.superview?.backgroundColor = .clear
+        }
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }

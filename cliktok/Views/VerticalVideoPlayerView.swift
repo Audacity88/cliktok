@@ -6,6 +6,8 @@ struct VerticalVideoPlayerView: View {
     var showBackButton: Bool
     @Binding var clearSearchOnDismiss: Bool
     @State private var currentIndex: Int
+    @State private var dragOffset = CGSize.zero
+    @State private var opacity: Double = 1.0
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
@@ -26,7 +28,9 @@ struct VerticalVideoPlayerView: View {
             let height = max(1, geometry.size.height) // Prevent zero height
             
             ZStack {
-                Color.black.edgesIgnoringSafeArea(.all)
+                Color.black
+                    .opacity(opacity)
+                    .edgesIgnoringSafeArea(.all)
                 
                 if videos.isEmpty {
                     Text("No videos available")
@@ -65,5 +69,36 @@ struct VerticalVideoPlayerView: View {
                 }
             }
         }
+        .gesture(
+            DragGesture()
+                .onChanged { gesture in
+                    // Only allow horizontal dragging
+                    if abs(gesture.translation.width) > abs(gesture.translation.height) {
+                        dragOffset = gesture.translation
+                        // Calculate opacity based on drag distance
+                        let dragPercentage = min(1, abs(gesture.translation.width) / 200)
+                        opacity = 1 - dragPercentage
+                    }
+                }
+                .onEnded { gesture in
+                    let threshold: CGFloat = 100
+                    if gesture.translation.width > threshold {
+                        clearSearchOnDismiss = true
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            dragOffset = CGSize(width: UIScreen.main.bounds.width, height: 0)
+                            opacity = 0
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            dismiss()
+                        }
+                    } else {
+                        withAnimation(.interactiveSpring()) {
+                            dragOffset = .zero
+                            opacity = 1
+                        }
+                    }
+                }
+        )
+        .offset(x: dragOffset.width)
     }
 }
