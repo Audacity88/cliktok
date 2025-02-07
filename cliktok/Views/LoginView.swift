@@ -12,6 +12,7 @@ struct LoginView: View {
     @State private var errorMessage = ""
     @State private var isSignUp = false
     @State private var isLoading = false
+    @State private var showMarketerSignUp = false
     
     var body: some View {
         NavigationView {
@@ -137,7 +138,19 @@ struct LoginView: View {
                         Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
                             .foregroundColor(.white)
                     }
-                    .disabled(isLoading)
+                    .padding(.top)
+                    
+                    // Marketer Sign Up Button
+                    Button(action: {
+                        showMarketerSignUp = true
+                    }) {
+                        HStack {
+                            Image(systemName: "briefcase.fill")
+                            Text("Sign Up as Marketer")
+                        }
+                        .foregroundColor(.white)
+                    }
+                    .padding(.top, 8)
                     
                     if showError {
                         Text(errorMessage)
@@ -154,6 +167,9 @@ struct LoginView: View {
             }
         }
         .navigationViewStyle(StackNavigationViewStyle())
+        .sheet(isPresented: $showMarketerSignUp) {
+            MarketerSignUpView()
+        }
     }
 }
 

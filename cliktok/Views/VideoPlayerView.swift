@@ -166,6 +166,14 @@ struct VideoPlayerView: View {
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
         self.onPrefetch = onPrefetch
+        
+        // Configure audio session
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("Failed to set audio session category: \(error)")
+        }
     }
     
     var body: some View {
@@ -532,6 +540,9 @@ struct VideoPlayerView: View {
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = isMuted
                 
+                // Set audio volume to maximum
+                newPlayer.volume = 1.0
+                
                 // Add periodic time observer for better state management
                 let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
                 timeObserverToken = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
@@ -593,6 +604,10 @@ struct VideoPlayerView: View {
     private func toggleMute() {
         isMuted.toggle()
         player?.isMuted = isMuted
+        // Ensure volume is at maximum when unmuting
+        if !isMuted {
+            player?.volume = 1.0
+        }
     }
     
     private func togglePlayPause() {

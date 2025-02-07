@@ -11,6 +11,7 @@ struct Video: Identifiable, Codable {
     let createdAt: Date
     var likes: Int
     var views: Int
+    var isAdvertisement: Bool?
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -22,6 +23,7 @@ struct Video: Identifiable, Codable {
         case createdAt = "created_at"
         case likes
         case views
+        case isAdvertisement = "is_advertisement"
     }
     
     init(id: String? = nil,
@@ -32,7 +34,8 @@ struct Video: Identifiable, Codable {
          hashtags: [String],
          createdAt: Date = Date(),
          likes: Int = 0,
-         views: Int = 0) {
+         views: Int = 0,
+         isAdvertisement: Bool? = nil) {
         self.id = id
         self.userID = userID
         self.videoURL = videoURL
@@ -42,5 +45,6 @@ struct Video: Identifiable, Codable {
         self.createdAt = createdAt
         self.likes = likes
         self.views = views
+        self.isAdvertisement = isAdvertisement
     }
-} 
+}

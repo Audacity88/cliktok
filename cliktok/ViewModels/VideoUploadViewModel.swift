@@ -10,11 +10,36 @@ class VideoUploadViewModel: ObservableObject {
     @Published var isUploading = false
     @Published var progress: Double = 0
     @Published var error: Error?
+    @Published var isAdvertisement = false
+    @Published var isUserMarketer = false
+    
     var onUploadComplete: (() -> Void)?
     
     private let storage = Storage.storage()
     private let db = Firestore.firestore()
     private let logger = Logger(subsystem: "gauntletai.cliktok", category: "VideoUploadViewModel")
+    
+    init() {
+        Task {
+            await checkMarketerStatus()
+        }
+    }
+    
+    private func checkMarketerStatus() async {
+        if let user = AuthenticationManager.shared.currentUser {
+            do {
+                let docRef = db.collection("users").document(user.uid)
+                let document = try await docRef.getDocument()
+                if let userData = try? document.data(as: User.self) {
+                    await MainActor.run {
+                        self.isUserMarketer = userData.userRole == .marketer
+                    }
+                }
+            } catch {
+                logger.error("Error checking marketer status: \(error.localizedDescription)")
+            }
+        }
+    }
     
     func uploadVideo(videoURL: URL, caption: String, hashtags: [String]) async throws {
         guard let userID = AuthenticationManager.shared.currentUser?.uid else {
@@ -47,7 +72,8 @@ class VideoUploadViewModel: ObservableObject {
                 videoURL: uploadedVideoURL.absoluteString,
                 thumbnailURL: uploadedThumbnailURL.absoluteString,
                 caption: caption,
-                hashtags: hashtags
+                hashtags: hashtags,
+                isAdvertisement: isUserMarketer && isAdvertisement ? true : nil
             )
             
             // Create document reference with auto-generated ID and set data
@@ -149,4 +175,4 @@ class VideoUploadViewModel: ObservableObject {
             throw NSError(domain: "ThumbnailGeneration", code: 500, userInfo: [NSLocalizedDescriptionKey: "Failed to generate thumbnail data"])
         }
     }
-} 
+}

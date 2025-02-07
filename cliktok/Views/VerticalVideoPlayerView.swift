@@ -16,6 +16,9 @@ struct VerticalVideoPlayerView: View {
     
     var body: some View {
         GeometryReader { geometry in
+            let width = max(1, geometry.size.width)  // Prevent zero width
+            let height = max(1, geometry.size.height) // Prevent zero height
+            
             ZStack {
                 Color.black.edgesIgnoringSafeArea(.all)
                 
@@ -27,19 +30,16 @@ struct VerticalVideoPlayerView: View {
                         ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
                             VideoPlayerView(video: video, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
                                 .environmentObject(feedViewModel)
-                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .frame(width: width, height: height)
                                 .rotationEffect(.degrees(-90))
                                 .tag(index)
                         }
                     }
-                    .frame(
-                        width: geometry.size.height,
-                        height: geometry.size.width
-                    )
+                    .frame(width: height, height: width)
                     .rotationEffect(.degrees(90), anchor: .topLeading)
                     .offset(
-                        x: geometry.size.width,
-                        y: geometry.size.width/2 - geometry.size.height/2
+                        x: width,
+                        y: width / 2 - height / 2
                     )
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea()

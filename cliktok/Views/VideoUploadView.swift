@@ -46,6 +46,10 @@ struct VideoUploadView: View {
                     Section(header: Text("Details")) {
                         TextField("Caption", text: $caption)
                         HashtagTextField(text: $hashtags, placeholder: "Enter hashtags")
+                        
+                        if viewModel.isUserMarketer {
+                            Toggle("Mark as Advertisement", isOn: $viewModel.isAdvertisement)
+                        }
                     }
                     
                     Section {

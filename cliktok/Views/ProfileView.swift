@@ -4,6 +4,7 @@ import FirebaseAuth
 
 struct ProfileView: View {
     @StateObject private var viewModel = UserViewModel()
+    @StateObject private var feedViewModel = VideoFeedViewModel()
     @State private var isEditing = false
     @State private var username = ""
     @State private var displayName = ""
@@ -44,6 +45,7 @@ struct ProfileView: View {
                         selectedImageData: .init(get: { selectedImageData }, set: { selectedImageData = $0 }),
                         viewModel: viewModel
                     )
+                    .environmentObject(feedViewModel)
                 }
             } else {
                 ProgressView()
