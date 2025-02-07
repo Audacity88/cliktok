@@ -43,7 +43,15 @@ struct HashtagTextField: View {
                         // Handle space or return
                         if newValue.contains(" ") || newValue.contains("\n") {
                             if !processed.isEmpty && !tags.contains(processed) {
-                                addTag(processed)
+                                if singleTagMode {
+                                    // In single tag mode, replace existing tag
+                                    tags = [processed]
+                                } else {
+                                    // In multi-tag mode, append
+                                    tags.append(processed)
+                                }
+                                currentInput = ""
+                                updateText()
                             } else {
                                 currentInput = ""
                             }
@@ -53,13 +61,21 @@ struct HashtagTextField: View {
                     }
                     .onSubmit {
                         if !currentInput.isEmpty && !tags.contains(currentInput) {
-                            addTag(currentInput)
+                            if singleTagMode {
+                                // In single tag mode, replace existing tag
+                                tags = [currentInput]
+                            } else {
+                                // In multi-tag mode, append
+                                tags.append(currentInput)
+                            }
+                            currentInput = ""
+                            updateText()
                             // Keep keyboard focused
                             isInputFocused = true
                         }
                     }
                 
-                if singleTagMode && currentInput.isEmpty && tags.isEmpty {
+                if singleTagMode && !currentInput.isEmpty {
                     Button(action: {
                         currentInput = ""
                         tags.removeAll()
@@ -80,28 +96,37 @@ struct HashtagTextField: View {
                     ForEach(tags, id: \.self) { tag in
                         TagPillView(tag: tag, isSelected: selectedTag == tag)
                             .onTapGesture {
-                                handleTagTap(tag)
+                                if singleTagMode {
+                                    // In single tag mode, tapping removes the tag
+                                    tags.removeAll()
+                                    updateText()
+                                } else {
+                                    // In multi-tag mode, handle selection/deletion
+                                    handleTagTap(tag)
+                                }
                                 // Keep keyboard focused after tag interaction
                                 isInputFocused = true
                             }
-                    }
-                    
-                    // Preview pill for current input
-                    if !currentInput.isEmpty {
-                        TagPillView(tag: currentInput, isPreview: true)
-                            .transition(.opacity)
                     }
                 }
                 .padding(.vertical, 4)
                 .animation(.easeInOut(duration: 0.2), value: currentInput)
             }
         }
-    }
-    
-    private func addTag(_ tag: String) {
-        tags.append(tag)
-        currentInput = ""
-        updateText()
+        .onChange(of: text) { oldValue, newValue in
+            // Update tags when text changes externally
+            let newTags = newValue
+                .split(separator: " ")
+                .map { String($0).replacingOccurrences(of: " ", with: "") }
+                .filter { !$0.isEmpty }
+            
+            if singleTagMode {
+                // In single tag mode, only keep the last tag
+                tags = newTags.suffix(1)
+            } else {
+                tags = newTags
+            }
+        }
     }
     
     private func handleTagTap(_ tag: String) {

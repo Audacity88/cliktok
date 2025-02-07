@@ -9,12 +9,19 @@ struct VideoGridView: View {
     @State private var showEditSheet = false
     @State private var videoToEdit: Video?
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
+    @Binding var clearSearchOnDismiss: Bool
     
     private let columns = [
         GridItem(.flexible(), spacing: 1),
         GridItem(.flexible(), spacing: 1),
         GridItem(.flexible(), spacing: 1)
     ]
+    
+    init(videos: [Video], showBackButton: Bool, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
+        self.videos = videos
+        self.showBackButton = showBackButton
+        self._clearSearchOnDismiss = clearSearchOnDismiss
+    }
     
     var body: some View {
         LazyVGrid(columns: columns, spacing: 1) {
@@ -52,7 +59,7 @@ struct VideoGridView: View {
             }
         }
         .fullScreenCover(item: $selectedVideo) { video in
-            VideoPlayerView(video: video, showBackButton: showBackButton)
+            VerticalVideoPlayerView(videos: videos, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
                 .environmentObject(feedViewModel)
                 .edgesIgnoringSafeArea(.all)
         }

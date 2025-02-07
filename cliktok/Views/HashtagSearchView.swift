@@ -6,6 +6,11 @@ struct HashtagSearchView: View {
     @State private var isSearching = false
     @State private var hasSearchResults = false
     @FocusState private var isSearchFocused: Bool
+    @Binding var clearSearchOnDismiss: Bool
+    
+    init(clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
+        self._clearSearchOnDismiss = clearSearchOnDismiss
+    }
     
     var body: some View {
         NavigationView {
@@ -45,7 +50,7 @@ struct HashtagSearchView: View {
                         .padding()
                 } else {
                     // Show search results in a grid
-                    VideoGridView(videos: feedViewModel.searchResults, showBackButton: true)
+                    VideoGridView(videos: feedViewModel.searchResults, showBackButton: true, clearSearchOnDismiss: $clearSearchOnDismiss)
                         .padding(.horizontal, 1)
                 }
             }
@@ -70,6 +75,14 @@ struct HashtagSearchView: View {
             }
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarBackground(Color.black, for: .navigationBar)
+            .onChange(of: clearSearchOnDismiss) { oldValue, newValue in
+                if newValue {
+                    searchText = ""
+                    feedViewModel.clearSearch()
+                    hasSearchResults = false
+                    clearSearchOnDismiss = false
+                }
+            }
         }
     }
     
@@ -90,4 +103,4 @@ struct HashtagSearchView: View {
         
         hasSearchResults = true
     }
-} 
+}

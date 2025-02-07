@@ -140,6 +140,7 @@ struct VideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
     let video: Video
     let showBackButton: Bool
+    @Binding var clearSearchOnDismiss: Bool
     @State private var player: AVPlayer?
     @State private var isMuted = false
     @State private var showControls = true
@@ -160,9 +161,10 @@ struct VideoPlayerView: View {
     @State private var creator: User?
     let onPrefetch: (([Video]) -> Void)?
     
-    init(video: Video, showBackButton: Bool, onPrefetch: (([Video]) -> Void)? = nil) {
+    init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), onPrefetch: (([Video]) -> Void)? = nil) {
         self.video = video
         self.showBackButton = showBackButton
+        self._clearSearchOnDismiss = clearSearchOnDismiss
         self.onPrefetch = onPrefetch
     }
     
@@ -208,6 +210,7 @@ struct VideoPlayerView: View {
                         HStack {
                             Button(action: {
                                 cleanupPlayer()
+                                clearSearchOnDismiss = true
                                 dismiss()
                             }) {
                                 Image(systemName: "chevron.left")
