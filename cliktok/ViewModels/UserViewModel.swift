@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 class UserViewModel: ObservableObject {
     @Published var currentUser: User?
+    @Published var viewedUser: User?
     @Published var userVideos: [Video] = []
     @Published var isLoading = false
     @Published var error: Error?
@@ -22,44 +23,59 @@ class UserViewModel: ObservableObject {
     
     func fetchCurrentUser() async {
         guard let userId = Auth.auth().currentUser?.uid else { return }
-        await fetchUser(userId: userId)
+        let user = await fetchUserInternal(userId: userId)
+        self.currentUser = user
+        if user == nil {
+            // If no user data exists, create a default profile
+            try? await createUserProfile(
+                username: "user_\(userId.prefix(6))",
+                displayName: "New User",
+                bio: "Welcome to my profile!"
+            )
+        }
     }
     
     func fetchUser(userId: String) async {
+        // If fetching current user's profile, update currentUser
+        if userId == Auth.auth().currentUser?.uid {
+            await fetchCurrentUser()
+        } else {
+            // If fetching another user's profile, update viewedUser
+            viewedUser = await fetchUserInternal(userId: userId)
+        }
+    }
+    
+    private func fetchUserInternal(userId: String) async -> User? {
         do {
             let docSnapshot = try await db.collection("users").document(userId).getDocument()
             if let data = docSnapshot.data() {
-                let user = User(
+                return User(
                     id: userId,
-                    username: data["username"] as? String ?? "",
+                    email: data["email"] as? String ?? Auth.auth().currentUser?.email ?? "",
                     displayName: data["displayName"] as? String ?? "",
                     bio: data["bio"] as? String ?? "",
                     profileImageURL: data["profileImageURL"] as? String,
                     isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
-                    balance: data["balance"] as? Double ?? 0.0
-                )
-                self.currentUser = user
-            } else {
-                // If no user data exists, create a default profile
-                try? await createUserProfile(
-                    username: "user_\(userId.prefix(6))",
-                    displayName: "New User",
-                    bio: "Welcome to my profile!"
+                    balance: data["balance"] as? Double ?? 0.0,
+                    userRole: UserRole(rawValue: data["userRole"] as? String ?? "") ?? .regular,
+                    companyName: data["companyName"] as? String
                 )
             }
         } catch {
             self.error = error
             print("Error fetching user: \(error)")
         }
+        return nil
     }
     
     func createUserProfile(username: String, displayName: String, bio: String) async throws {
-        guard let userId = Auth.auth().currentUser?.uid else { return }
+        guard let userId = Auth.auth().currentUser?.uid,
+              let email = Auth.auth().currentUser?.email else { return }
         
         let now = Timestamp()
         let user = User(
             id: userId,
-            username: username,
+            email: email,
             displayName: displayName,
             bio: bio,
             profileImageURL: nil,
@@ -68,23 +84,23 @@ class UserViewModel: ObservableObject {
         )
         
         try await db.collection("users").document(userId).setData([
-            "username": username,
+            "email": email,
             "displayName": displayName,
             "bio": bio,
             "isPrivateAccount": false,
             "balance": 0.0,
             "createdAt": now,
-            "updatedAt": now
+            "updatedAt": now,
+            "userRole": UserRole.regular.rawValue
         ])
         
         currentUser = user
     }
     
-    func updateProfile(username: String, displayName: String, bio: String) async throws {
+    func updateProfile(displayName: String, bio: String) async throws {
         guard let userId = Auth.auth().currentUser?.uid else { return }
         
         let userData: [String: Any] = [
-            "username": username,
             "displayName": displayName,
             "bio": bio,
             "updatedAt": Timestamp()
@@ -94,95 +110,80 @@ class UserViewModel: ObservableObject {
         
         // Update local user object
         if var updatedUser = currentUser {
-            updatedUser.username = username
             updatedUser.displayName = displayName
             updatedUser.bio = bio
             currentUser = updatedUser
         }
     }
     
-    func uploadProfileImage(_ image: UIImage) async throws -> String? {
-        guard let userId = Auth.auth().currentUser?.uid else { return nil }
-        guard let imageData = image.jpegData(compressionQuality: 0.8) else { return nil }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            let filename = "\(UUID().uuidString).jpg"
-            let storageRef = storage.reference().child("profile_images/\(userId)/\(filename)")
-            
-            _ = try await storageRef.putDataAsync(imageData)
-            let url = try await storageRef.downloadURL()
-            
-            // Update user profile with new image URL
-            try await db.collection("users").document(userId).updateData([
-                "profileImageURL": url.absoluteString,
-                "updatedAt": Timestamp()
-            ])
-            
-            // Update local user object
-            if var updatedUser = currentUser {
-                updatedUser.profileImageURL = url.absoluteString
-                currentUser = updatedUser
-            }
-            
-            return url.absoluteString
-        } catch {
-            print("Error uploading profile image: \(error)")
-            throw error
-        }
-    }
-    
-    func togglePrivateAccount() async throws {
-        guard let userId = Auth.auth().currentUser?.uid else { return }
-        guard let currentUser = currentUser else { return }
-        
-        try await db.collection("users").document(userId).updateData([
-            "isPrivateAccount": !currentUser.isPrivateAccount,
-            "updatedAt": Timestamp()
-        ])
-        
-        if var updatedUser = self.currentUser {
-            updatedUser.isPrivateAccount = !currentUser.isPrivateAccount
-            self.currentUser = updatedUser
-        }
-    }
-    
     func fetchUserVideos(for userId: String? = nil) async {
         let targetUserId = userId ?? Auth.auth().currentUser?.uid
-        guard let userId = targetUserId else { return }
+        guard let uid = targetUserId else { return }
         
         do {
             let querySnapshot = try await db.collection("videos")
-                .whereField("user_id", isEqualTo: userId)
+                .whereField("user_id", isEqualTo: uid)
                 .order(by: "created_at", descending: true)
                 .getDocuments()
             
-            self.userVideos = querySnapshot.documents.compactMap { document in
-                guard 
-                    let userID = document.data()["user_id"] as? String,
-                    let videoURL = document.data()["video_url"] as? String,
-                    let caption = document.data()["caption"] as? String,
-                    let createdAt = document.data()["created_at"] as? Timestamp
-                else {
-                    return nil
-                }
-                
+            userVideos = querySnapshot.documents.compactMap { document in
+                let data = document.data()
                 return Video(
                     id: document.documentID,
-                    userID: userID,
-                    videoURL: videoURL,
-                    thumbnailURL: document.data()["thumbnail_url"] as? String,
-                    caption: caption,
-                    hashtags: document.data()["hashtags"] as? [String] ?? [],
-                    createdAt: createdAt.dateValue(),
-                    likes: document.data()["likes"] as? Int ?? 0,
-                    views: document.data()["views"] as? Int ?? 0
+                    userID: data["user_id"] as? String ?? "",
+                    videoURL: data["video_url"] as? String ?? "",
+                    thumbnailURL: data["thumbnail_url"] as? String,
+                    caption: data["caption"] as? String ?? "",
+                    hashtags: data["hashtags"] as? [String] ?? [],
+                    createdAt: (data["created_at"] as? Timestamp)?.dateValue() ?? Date(),
+                    likes: data["likes"] as? Int ?? 0,
+                    views: data["views"] as? Int ?? 0,
+                    isAdvertisement: data["is_advertisement"] as? Bool ?? false
                 )
             }
         } catch {
             print("Error fetching user videos: \(error)")
+            self.error = error
         }
+    }
+    
+    func uploadProfileImage(_ image: UIImage) async throws -> String? {
+        guard let userId = Auth.auth().currentUser?.uid,
+              let imageData = image.jpegData(compressionQuality: 0.7) else { return nil }
+        
+        let storageRef = storage.reference().child("profile_images/\(userId).jpg")
+        _ = try await storageRef.putDataAsync(imageData)
+        let downloadURL = try await storageRef.downloadURL()
+        
+        // Update Firestore with new profile image URL
+        try await db.collection("users").document(userId).updateData([
+            "profileImageURL": downloadURL.absoluteString,
+            "updatedAt": Timestamp()
+        ])
+        
+        // Update local user object
+        if var updatedUser = currentUser {
+            updatedUser.profileImageURL = downloadURL.absoluteString
+            currentUser = updatedUser
+        }
+        
+        return downloadURL.absoluteString
+    }
+    
+    func togglePrivateAccount() async throws {
+        guard let userId = Auth.auth().currentUser?.uid,
+              let currentUser = currentUser else { return }
+        
+        let newPrivateStatus = !currentUser.isPrivateAccount
+        
+        try await db.collection("users").document(userId).updateData([
+            "isPrivateAccount": newPrivateStatus,
+            "updatedAt": Timestamp()
+        ])
+        
+        // Update local user object
+        var updatedUser = currentUser
+        updatedUser.isPrivateAccount = newPrivateStatus
+        self.currentUser = updatedUser
     }
 }

@@ -6,7 +6,6 @@ struct ProfileView: View {
     @StateObject private var viewModel = UserViewModel()
     @StateObject private var feedViewModel = VideoFeedViewModel()
     @State private var isEditing = false
-    @State private var username = ""
     @State private var displayName = ""
     @State private var bio = ""
     @State private var selectedItem: PhotosPickerItem?
@@ -29,7 +28,7 @@ struct ProfileView: View {
     
     var body: some View {
         Group {
-            if let user = viewModel.currentUser {
+            if let user = checkIsCurrentUser() ? viewModel.currentUser : viewModel.viewedUser {
                 if isEditing && !canEdit {
                     GuestRestrictedView()
                 } else {
@@ -38,7 +37,6 @@ struct ProfileView: View {
                         isCurrentUser: checkIsCurrentUser(),
                         canEdit: canEdit,
                         isEditing: .init(get: { isEditing }, set: { isEditing = $0 }),
-                        username: .init(get: { username }, set: { username = $0 }),
                         displayName: .init(get: { displayName }, set: { displayName = $0 }),
                         bio: .init(get: { bio }, set: { bio = $0 }),
                         selectedItem: .init(get: { selectedItem }, set: { selectedItem = $0 }),
@@ -81,7 +79,6 @@ struct ProfileContentView: View {
     let isCurrentUser: Bool
     let canEdit: Bool
     @Binding var isEditing: Bool
-    @Binding var username: String
     @Binding var displayName: String
     @Binding var bio: String
     @Binding var selectedItem: PhotosPickerItem?
@@ -91,7 +88,7 @@ struct ProfileContentView: View {
     
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(alignment: .center, spacing: 20) {
                 // Profile Image
                 if isCurrentUser {
                     PhotosPicker(selection: $selectedItem, matching: .images) {
@@ -103,7 +100,6 @@ struct ProfileContentView: View {
                 
                 if isEditing {
                     ProfileEditForm(
-                        username: $username,
                         displayName: $displayName,
                         bio: $bio,
                         isEditing: $isEditing,
@@ -119,16 +115,24 @@ struct ProfileContentView: View {
                     )
                 }
                 
-                // User's Videos Grid
-                if !viewModel.userVideos.isEmpty {
-                    VideoGridView(videos: viewModel.userVideos, showBackButton: true)
-                        .environmentObject(feedViewModel)
-                } else {
-                    Text("No videos yet")
-                        .foregroundColor(.gray)
-                        .padding()
+                // User's Videos Section
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Videos")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    
+                    if !viewModel.userVideos.isEmpty {
+                        VideoGridView(videos: viewModel.userVideos, showBackButton: true)
+                            .environmentObject(feedViewModel)
+                    } else {
+                        Text("No videos yet")
+                            .foregroundColor(.gray)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding()
+                    }
                 }
             }
+            .padding(.top)
         }
         .navigationTitle(isCurrentUser ? "Profile" : user.displayName)
         .navigationBarItems(
@@ -139,7 +143,6 @@ struct ProfileContentView: View {
                             if isEditing {
                                 isEditing = false
                             } else {
-                                username = user.username
                                 displayName = user.displayName
                                 bio = user.bio
                                 isEditing = true
@@ -162,7 +165,6 @@ struct ProfileContentView: View {
 }
 
 struct ProfileEditForm: View {
-    @Binding var username: String
     @Binding var displayName: String
     @Binding var bio: String
     @Binding var isEditing: Bool
@@ -170,10 +172,6 @@ struct ProfileEditForm: View {
     
     var body: some View {
         VStack(spacing: 16) {
-            TextField("Username", text: $username)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .padding(.horizontal)
-            
             TextField("Display Name", text: $displayName)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding(.horizontal)
@@ -186,7 +184,6 @@ struct ProfileEditForm: View {
                 Task {
                     do {
                         try await viewModel.updateProfile(
-                            username: username,
                             displayName: displayName,
                             bio: bio
                         )

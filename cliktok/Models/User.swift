@@ -1,4 +1,5 @@
 import Foundation
+import FirebaseAuth
 import FirebaseFirestore
 
 enum UserRole: String, Codable {
@@ -8,7 +9,7 @@ enum UserRole: String, Codable {
 
 struct User: Codable, Identifiable {
     @DocumentID var id: String?
-    var username: String
+    var email: String
     var displayName: String
     var bio: String
     var profileImageURL: String?
@@ -17,9 +18,14 @@ struct User: Codable, Identifiable {
     var userRole: UserRole
     var companyName: String?
     
+    var username: String {
+        // Use email without domain as username
+        email.components(separatedBy: "@").first ?? email
+    }
+    
     enum CodingKeys: String, CodingKey {
         case id
-        case username
+        case email
         case displayName = "displayName"
         case bio
         case profileImageURL = "profileImageURL"
@@ -30,7 +36,7 @@ struct User: Codable, Identifiable {
     }
     
     init(id: String? = nil,
-         username: String,
+         email: String,
          displayName: String,
          bio: String,
          profileImageURL: String? = nil,
@@ -39,7 +45,7 @@ struct User: Codable, Identifiable {
          userRole: UserRole = .regular,
          companyName: String? = nil) {
         self.id = id
-        self.username = username
+        self.email = email
         self.displayName = displayName
         self.bio = bio
         self.profileImageURL = profileImageURL

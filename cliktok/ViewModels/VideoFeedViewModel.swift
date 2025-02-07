@@ -81,12 +81,15 @@ class VideoFeedViewModel: ObservableObject {
                         // Manual decoding
                         if let data = data {
                             let user = User(
-                                username: data["username"] as? String ?? "",
+                                id: creatorId,
+                                email: data["email"] as? String ?? "",
                                 displayName: data["displayName"] as? String ?? "",
                                 bio: data["bio"] as? String ?? "",
                                 profileImageURL: data["profileImageURL"] as? String,
                                 isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
-                                balance: data["balance"] as? Double
+                                balance: data["balance"] as? Double ?? 0.0,
+                                userRole: UserRole(rawValue: data["userRole"] as? String ?? "") ?? .regular,
+                                companyName: data["companyName"] as? String
                             )
                             print("Successfully loaded creator: \(user.displayName)")
                             videoCreators[creatorId] = user

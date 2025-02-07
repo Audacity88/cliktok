@@ -66,7 +66,7 @@ class AuthenticationManager: ObservableObject {
         // Create regular user profile
         let user = User(
             id: result.user.uid,
-            username: email.components(separatedBy: "@").first ?? "",
+            email: email,
             displayName: email.components(separatedBy: "@").first ?? "",
             bio: "",
             userRole: .regular
@@ -85,7 +85,7 @@ class AuthenticationManager: ObservableObject {
         // Create marketer user profile
         let user = User(
             id: result.user.uid,
-            username: email.components(separatedBy: "@").first ?? "",
+            email: email,
             displayName: email.components(separatedBy: "@").first ?? "",
             bio: "",
             userRole: .marketer,

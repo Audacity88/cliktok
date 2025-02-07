@@ -12,9 +12,9 @@ struct VideoGridView: View {
     @Binding var clearSearchOnDismiss: Bool
     
     private let columns = [
-        GridItem(.flexible(), spacing: 1),
-        GridItem(.flexible(), spacing: 1),
-        GridItem(.flexible(), spacing: 1)
+        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
+        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
+        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1)
     ]
     
     init(videos: [Video], showBackButton: Bool, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
@@ -24,49 +24,56 @@ struct VideoGridView: View {
     }
     
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 1) {
-            ForEach(videos) { video in
-                ZStack {
-                    VideoThumbnailView(video: video)
-                        .aspectRatio(9/16, contentMode: .fill)
-                        .frame(height: 180)
-                        .clipped()
-                    
-                    // Invisible overlay for better touch handling
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedVideo = video
-                        }
-                        .contextMenu {
-                            if video.userID == Auth.auth().currentUser?.uid {
-                                Button(action: {
-                                    videoToEdit = video
-                                    showEditSheet = true
-                                }) {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                                
-                                Button(role: .destructive, action: {
-                                    videoToEdit = video
-                                    showEditSheet = true
-                                }) {
-                                    Label("Delete", systemImage: "trash")
+        GeometryReader { geometry in
+            let itemWidth = (geometry.size.width - 4) / 3 // 4 = 2 spacing + 2 padding
+            
+            LazyVGrid(columns: columns, spacing: 1) {
+                ForEach(videos) { video in
+                    ZStack {
+                        VideoThumbnailView(video: video)
+                            .aspectRatio(9/16, contentMode: .fill)
+                            .frame(width: itemWidth, height: itemWidth * (4/3))
+                            .clipped()
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedVideo = video
+                            }
+                            .contextMenu {
+                                if video.userID == Auth.auth().currentUser?.uid {
+                                    Button(action: {
+                                        videoToEdit = video
+                                        showEditSheet = true
+                                    }) {
+                                        Label("Edit", systemImage: "pencil")
+                                    }
+                                    
+                                    Button(role: .destructive, action: {
+                                        videoToEdit = video
+                                        showEditSheet = true
+                                    }) {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
-                        }
+                    }
                 }
             }
+            .padding(.horizontal, 1)
         }
+        .frame(maxWidth: .infinity)
         .fullScreenCover(item: $selectedVideo) { video in
-            VerticalVideoPlayerView(videos: videos, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
-                .environmentObject(feedViewModel)
-                .edgesIgnoringSafeArea(.all)
+            NavigationView {
+                VerticalVideoPlayerView(videos: videos, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
+                    .environmentObject(feedViewModel)
+                    .edgesIgnoringSafeArea(.all)
+            }
         }
         .sheet(isPresented: $showEditSheet) {
             if let video = videoToEdit {
-                VideoEditView(video: video, isPresented: $showEditSheet)
-                    .environmentObject(feedViewModel)
+                NavigationView {
+                    VideoEditView(video: video, isPresented: $showEditSheet)
+                        .environmentObject(feedViewModel)
+                }
             }
         }
     }
