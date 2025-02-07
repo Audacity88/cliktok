@@ -1,12 +1,25 @@
 const express = require('express');
 const cors = require('cors');
+require('dotenv').config();
+
+// Validate required environment variables
+const requiredEnvVars = ['STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY'];
+const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+
+if (missingEnvVars.length > 0) {
+  console.error('Missing required environment variables:', missingEnvVars.join(', '));
+  process.exit(1);
+}
+
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Enable CORS for all routes
 app.use(cors({
-  origin: '*',
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://cliktok.com', 'capacitor://localhost', 'http://localhost'] 
+    : '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Accept', 'Origin'],
   credentials: true,
@@ -17,7 +30,8 @@ app.use(express.json());
 
 // Log all requests
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  const mode = process.env.NODE_ENV || 'development';
+  console.log(`[${mode.toUpperCase()}] ${new Date().toISOString()} - ${req.method} ${req.path}`);
   console.log('Headers:', req.headers);
   console.log('Body:', req.body);
   console.log('Client IP:', req.ip);
@@ -29,28 +43,41 @@ app.use((req, res, next) => {
 
 app.get('/config', (req, res) => {
   console.log('Received request for /config');
-  console.log('Client headers:', req.headers);
   if (!process.env.STRIPE_PUBLISHABLE_KEY) {
     console.error('Missing STRIPE_PUBLISHABLE_KEY');
     return res.status(500).json({ error: 'Server configuration error' });
   }
-  res.json({ publishableKey: process.env.STRIPE_PUBLISHABLE_KEY });
+  
+  const mode = process.env.NODE_ENV || 'development';
+  res.json({ 
+    publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
+    mode: mode,
+    isTestMode: mode === 'test'
+  });
 });
 
 app.post('/create-payment-intent', async (req, res) => {
   try {
     const { amount, currency = 'usd' } = req.body;
-    console.log('Creating payment intent:', { amount, currency });
+    const mode = process.env.NODE_ENV || 'development';
+    console.log(`Creating payment intent [${mode}]:`, { amount, currency });
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100),
+      amount: amount, // Amount should already be in cents from client
       currency,
       automatic_payment_methods: {
         enabled: true,
       },
+      metadata: {
+        mode: mode
+      }
     });
 
-    res.json({ clientSecret: paymentIntent.client_secret });
+    res.json({ 
+      clientSecret: paymentIntent.client_secret,
+      mode: mode,
+      isTestMode: mode === 'test'
+    });
   } catch (error) {
     console.error('Error creating payment intent:', error);
     res.status(500).json({ error: error.message });
@@ -59,28 +86,19 @@ app.post('/create-payment-intent', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  const os = require('os');
-  const networkInterfaces = os.networkInterfaces();
-  res.json({
+  const mode = process.env.NODE_ENV || 'development';
+  res.json({ 
     status: 'ok',
-    interfaces: networkInterfaces,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    mode: mode,
+    stripe: 'configured'
   });
 });
 
 // Create server with IPv4 configuration
 app.listen(port, '127.0.0.1', () => {
-  const os = require('os');
-  const networkInterfaces = os.networkInterfaces();
-  console.log('Network interfaces:', networkInterfaces);
-  console.log(`Server running on http://127.0.0.1:${port}`);
-  
-  // Print all available interfaces
-  Object.keys(networkInterfaces).forEach((ifname) => {
-    networkInterfaces[ifname].forEach((iface) => {
-      console.log(`Interface ${ifname}: ${iface.family} - ${iface.address}`);
-    });
-  });
+  const mode = process.env.NODE_ENV || 'development';
+  console.log(`Server running in ${mode.toUpperCase()} mode on http://127.0.0.1:${port}`);
 });
 
 // Handle errors

@@ -87,6 +87,7 @@
   - [ ] Google Cloud Vision API setup
   - [ ] Content filtering rules
   - [ ] Automated content flagging
+  - [ ] AI tagging/description
 - [ ] User Reporting System
   - [ ] Report functionality
   - [ ] Report management

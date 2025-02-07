@@ -8,6 +8,9 @@ class VideoFeedViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var error: Error?
     @Published var videoCreators: [String: User] = [:]
+    @Published var searchResults: [Video] = []
+    @Published var isSearching = false
+    @Published var searchError: Error?
     
     private var lastDocument: DocumentSnapshot?
     private let pageSize = 5
@@ -143,6 +146,76 @@ class VideoFeedViewModel: ObservableObject {
             }
         } catch {
             print("Error updating video stats: \(error.localizedDescription)")
+        }
+    }
+    
+    func searchVideos(hashtag: String) async {
+        isSearching = true
+        searchError = nil
+        
+        do {
+            // Remove spaces and convert to lowercase
+            let searchTerm = hashtag.lowercased().replacingOccurrences(of: " ", with: "")
+            
+            let snapshot = try await db.collection("videos")
+                .whereField("hashtags", arrayContains: searchTerm)
+                .order(by: "created_at", descending: true)
+                .limit(to: 50)
+                .getDocuments()
+            
+            searchResults = snapshot.documents.compactMap { document in
+                try? document.data(as: Video.self)
+            }
+            
+            // Fetch creators for search results
+            await fetchCreators(for: searchResults)
+            
+            isSearching = false
+        } catch {
+            searchError = error
+            isSearching = false
+        }
+    }
+    
+    func clearSearch() {
+        searchResults = []
+        searchError = nil
+        isSearching = false
+    }
+    
+    @MainActor
+    func updateVideo(_ video: Video, caption: String, hashtags: [String]) async throws {
+        guard let videoId = video.id else {
+            throw NSError(domain: "VideoFeed", code: 400, userInfo: [NSLocalizedDescriptionKey: "Video ID not found"])
+        }
+        
+        print("Updating video \(videoId) with caption: \(caption), hashtags: \(hashtags)")
+        isLoading = true
+        do {
+            let updates: [String: Any] = [
+                "caption": caption,
+                "hashtags": hashtags.map { $0.lowercased() }
+            ]
+            
+            try await db.collection("videos").document(videoId).updateData(updates)
+            
+            // Update local arrays
+            if let index = videos.firstIndex(where: { $0.id == videoId }) {
+                videos[index].caption = caption
+                videos[index].hashtags = hashtags
+            }
+            
+            if let index = searchResults.firstIndex(where: { $0.id == videoId }) {
+                searchResults[index].caption = caption
+                searchResults[index].hashtags = hashtags
+            }
+            
+            print("Successfully updated video \(videoId)")
+            isLoading = false
+        } catch {
+            print("Error updating video \(videoId): \(error)")
+            isLoading = false
+            throw error
         }
     }
 }

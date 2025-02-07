@@ -55,14 +55,11 @@ ClikTok’s AI agents are more than passive recommendation engines—they act as
 - AI notices that she laughs the hardest at certain creators and boosts their videos in her recommendations.  
 - She starts tipping funniest videos, and AI learns to prioritize humor-based content that matches her sense of comedy.  
 
-### **3.6 The Social Giver & Data-Driven Supporter (Mike & Olivia, 22 & 35, Community-Focused Viewers) 🎭💰📊**  
-- Mike enjoys tipping as a way to engage with a community, while Olivia prefers structured tipping based on insights.  
+### **3.6 The Social Giver & Data-Driven Supporter (Mike, 35, Community-Focused Viewer) 🎭💰📊**  
+- Mike enjoys tipping as a way to engage with a community.  
 - Mike tells his AI agent: “Show me creators that need a boost.”  
 - AI prioritizes content from smaller creators who are gaining traction but haven’t yet broken out.  
 - AI invites him to a “Community Tipping Challenge,” where a group collectively tips small amounts to boost an emerging creator.  
-- Olivia asks her AI: “Optimize my tips for the highest engagement.”  
-- AI analyzes her tipping history and suggests: "Creators in the 'DIY' and 'Comedy' categories give you the most interaction—would you like to focus there?"  
-- AI enables customized tip allocation (e.g., "Tip 60% to entertainment, 40% to educational content").  
 
 ---
 

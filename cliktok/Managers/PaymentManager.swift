@@ -1,5 +1,5 @@
 import Foundation
-import StripePayments
+import StripePaymentSheet
 import FirebaseFirestore
 import Alamofire
 import Network
@@ -38,9 +38,15 @@ class PaymentManager: NSObject, ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var error: PaymentError?
     @Published private(set) var isConfigured = false
+    @Published private(set) var isTestMode = false
     
     // Base URL for the server
-    private let baseURL = "http://127.0.0.1:3000"  // Use localhost IP instead of hostname
+    #if DEBUG
+    private let baseURL = ProcessInfo.processInfo.environment["STRIPE_API_URL"] ?? "http://127.0.0.1:3000"
+    #else
+    private let baseURL = ProcessInfo.processInfo.environment["STRIPE_API_URL"] ?? "https://api.cliktok.com"
+    #endif
+    
     private var retryCount = 0
     private let maxRetries = 3
     
@@ -60,6 +66,7 @@ class PaymentManager: NSObject, ObservableObject {
     private override init() {
         // Load development mode state
         self.isDevelopmentMode = defaults.bool(forKey: isDevelopmentModeKey)
+        self.isTestMode = false
         
         // Initialize balance to 0
         self.currentBalance = 0
@@ -70,22 +77,10 @@ class PaymentManager: NSObject, ObservableObject {
         let savedBalance = defaults.double(forKey: "userBalance")
         self.currentBalance = Decimal(savedBalance)
         
-        // Set development mode for debug builds
-        #if DEBUG
-        if !defaults.bool(forKey: "didSetInitialDevelopmentMode") {
-            self.isDevelopmentMode = true
-            defaults.set(true, forKey: isDevelopmentModeKey)
-            defaults.set(true, forKey: "didSetInitialDevelopmentMode")
-        }
-        #endif
+        // Always configure server connection first
+        configureServerConnection()
         
-        print("PaymentManager initialized in \(isDevelopmentMode ? "development" : "production") mode")
-        print("Current balance: \(currentBalance)")
-        
-        // Only configure server connection if not in development mode
-        if !isDevelopmentMode {
-            configureServerConnection()
-        }
+        print("PaymentManager initialized - checking server configuration...")
     }
     
     private func configureServerConnection() {
@@ -242,8 +237,7 @@ class PaymentManager: NSObject, ObservableObject {
     
     private struct HealthResponse: Codable {
         let status: String
-        let timestamp: String
-        let interfaces: [String: [[String: String]]]
+        let mode: String
     }
     
     private func configureStripe() async {
@@ -260,23 +254,22 @@ class PaymentManager: NSObject, ObservableObject {
             print("Checking server health at \(baseURL)/health")
             let healthRequest = alamofireSession.request("\(baseURL)/health",
                                                        method: .get,
-                                                       headers: headers,
-                                                       requestModifier: { urlRequest in
-                urlRequest.timeoutInterval = 5
-                urlRequest.setValue("127.0.0.1:3000", forHTTPHeaderField: "Host")
-            })
-            
-            // Log cURL command for health check
-            healthRequest.cURLDescription { description in
-                print("Health check cURL command: \(description)")
-            }
+                                                       headers: headers)
             
             do {
                 let healthResponse = try await healthRequest.serializingDecodable(HealthResponse.self).value
-                print("Server health check response: status=\(healthResponse.status), timestamp=\(healthResponse.timestamp)")
+                print("Server health check response: status=\(healthResponse.status), mode=\(healthResponse.mode)")
                 
                 guard healthResponse.status == "ok" else {
                     throw PaymentError.networkError("Server health check failed: \(healthResponse.status)")
+                }
+                
+                // If server is in test mode, disable development mode
+                if healthResponse.mode == "test" {
+                    print("Server is in test mode - disabling development mode")
+                    isDevelopmentMode = false
+                    defaults.set(false, forKey: isDevelopmentModeKey)
+                    defaults.set(false, forKey: "didSetInitialDevelopmentMode")
                 }
             } catch {
                 print("Server health check failed: \(error)")
@@ -286,62 +279,50 @@ class PaymentManager: NSObject, ObservableObject {
             print("Fetching Stripe configuration from \(baseURL)/config")
             
             // Create request with timeout using custom session
-            let baseRequest = alamofireSession.request("\(baseURL)/config",
-                                                     method: .get,
-                                                     headers: headers,
-                                                     requestModifier: { urlRequest in
-                urlRequest.timeoutInterval = 5
-                urlRequest.setValue("127.0.0.1:3000", forHTTPHeaderField: "Host")
-            })
-            
-            // Log cURL command before validation chain
-            baseRequest.cURLDescription { description in
-                print("cURL command: \(description)")
-            }
-            
-            // Create validated request
-            let request = baseRequest.validate()
-                                   .serializingDecodable(StripeConfig.self)
+            let request = alamofireSession.request("\(baseURL)/config",
+                                                 method: .get,
+                                                 headers: headers)
+                .validate()
+                .serializingDecodable(StripeConfig.self)
             
             // Use async/await with timeout
-            let response = try await withTimeout(seconds: 30) {
+            let config = try await withTimeout(seconds: 30) {
                 try await request.value
             }
             
-            print("Received response: \(response)")
-            StripeAPI.defaultPublishableKey = response.publishableKey
+            print("Received config: mode=\(config.mode), isTestMode=\(config.isTestMode)")
+            StripeAPI.defaultPublishableKey = config.publishableKey
+            isTestMode = config.isTestMode
+            
+            // If server is in test mode, ensure development mode is disabled
+            if isTestMode {
+                print("Stripe config confirms test mode - ensuring development mode is disabled")
+                isDevelopmentMode = false
+                defaults.set(false, forKey: isDevelopmentModeKey)
+                defaults.set(false, forKey: "didSetInitialDevelopmentMode")
+            }
+            
             isConfigured = true
             error = nil
             
+            print("Payment configuration complete - Mode: \(isTestMode ? "Test" : (isDevelopmentMode ? "Development" : "Production"))")
+            
         } catch let error as AFError {
             print("Alamofire error: \(error)")
-            print("Response code: \(error.responseCode ?? -1)")
-            
-            switch error {
-            case .responseValidationFailed(let reason):
-                print("Validation failed: \(reason)")
-            case .responseSerializationFailed(let reason):
-                print("Serialization failed: \(reason)")
-            default:
-                print("Other error: \(error)")
-            }
-            
-            print("Underlying error: \(error.underlyingError?.localizedDescription ?? "none")")
             self.error = PaymentError.networkError(error.localizedDescription)
-            
-            if retryCount < maxRetries {
-                retryCount += 1
-                print("Retrying Stripe configuration (attempt \(retryCount)/\(maxRetries))...")
-                try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * retryCount))
-                await configureStripe()
-            }
+            retryConfiguration()
         } catch {
             print("General error: \(error)")
             self.error = PaymentError.networkError(error.localizedDescription)
-            
-            if retryCount < maxRetries {
-                retryCount += 1
-                print("Retrying Stripe configuration (attempt \(retryCount)/\(maxRetries))...")
+            retryConfiguration()
+        }
+    }
+    
+    private func retryConfiguration() {
+        if retryCount < maxRetries {
+            retryCount += 1
+            print("Retrying Stripe configuration (attempt \(retryCount)/\(maxRetries))...")
+            Task {
                 try? await Task.sleep(nanoseconds: UInt64(1_000_000_000 * retryCount))
                 await configureStripe()
             }
@@ -391,17 +372,9 @@ class PaymentManager: NSObject, ObservableObject {
     }
     
     @MainActor
-    func createPaymentIntent(amount: Int) async throws -> String {
+    func createPaymentIntent(amount: Int) async throws -> PaymentSheet {
         if isDevelopmentMode {
-            // Convert cents to dollars for the balance check
-            let dollars = NSDecimalNumber(value: Double(amount) / 100.0).decimalValue
-            print("Checking balance for payment: \(dollars) dollars")
-            // In development mode, just deduct from balance
-            if useBalance(amount: dollars) {
-                return "dev_payment_success"
-            } else {
-                throw PaymentError.insufficientFunds
-            }
+            throw PaymentError.notConfigured
         }
         
         guard isConfigured else {
@@ -411,6 +384,9 @@ class PaymentManager: NSObject, ObservableObject {
         guard let url = URL(string: "\(baseURL)/create-payment-intent") else {
             throw PaymentError.invalidURL
         }
+        
+        isLoading = true
+        defer { isLoading = false }
         
         let parameters: Parameters = [
             "amount": amount,
@@ -432,7 +408,18 @@ class PaymentManager: NSObject, ObservableObject {
                 .serializingDecodable(CreatePaymentIntentResponse.self)
                 .value
             
-            return response.clientSecret
+            // Initialize the PaymentSheet
+            var configuration = PaymentSheet.Configuration()
+            configuration.merchantDisplayName = "CliktTok"
+            configuration.allowsDelayedPaymentMethods = false
+            configuration.returnURL = "cliktok://stripe-redirect"
+            
+            let paymentSheet = PaymentSheet(
+                paymentIntentClientSecret: response.clientSecret,
+                configuration: configuration
+            )
+            
+            return paymentSheet
         } catch {
             print("Payment intent creation failed: \(error)")
             throw PaymentError.serverError(error.localizedDescription)
@@ -479,6 +466,25 @@ class PaymentManager: NSObject, ObservableObject {
         print("Switched to \(isDevelopmentMode ? "development" : "production") mode")
     }
     
+    func clearPaymentData() {
+        // Clear all payment-related UserDefaults
+        defaults.removeObject(forKey: isDevelopmentModeKey)
+        defaults.removeObject(forKey: "didSetInitialDevelopmentMode")
+        defaults.removeObject(forKey: "userBalance")
+        
+        // Reset local state
+        isDevelopmentMode = false
+        isTestMode = false
+        currentBalance = 0
+        
+        print("Cleared all payment data from UserDefaults")
+        
+        // Reconfigure payment system
+        Task {
+            await configureStripe()
+        }
+    }
+    
     // MARK: - Helper Functions
     
     private func formatCurrency(_ amount: Decimal) -> String {
@@ -496,6 +502,8 @@ private struct PaymentIntentResponse: Codable {
 
 private struct StripeConfig: Codable {
     let publishableKey: String
+    let mode: String
+    let isTestMode: Bool
 }
 
 private struct ErrorResponse: Codable {

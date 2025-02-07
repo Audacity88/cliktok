@@ -1,6 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
-import StripePayments
+import StripePaymentSheet
 import Foundation
 
 @MainActor
@@ -48,7 +48,13 @@ class TipViewModel: ObservableObject {
         // Only log if there's an actual change or if it's a tip operation
         if abs(change) > 0.001 || reason.contains("Tip") {
             let timestamp = Date()
-            let mode = paymentManager.isDevelopmentMode ? "Development" : "Production"
+            let mode = if paymentManager.isDevelopmentMode {
+                "Development"
+            } else if paymentManager.isTestMode {
+                "Test"
+            } else {
+                "Production"
+            }
             
             var logDetails: [String: Any] = [
                 "timestamp": timestamp,
@@ -88,12 +94,48 @@ class TipViewModel: ObservableObject {
                            details: ["requestedAmount": amount])
         } else {
             do {
-                let newBalance = balance + amount
-                try await updateBalance(amount: newBalance)
-                logBalanceChange(oldBalance: oldBalance, 
-                               newBalance: newBalance, 
-                               reason: "Added Real Funds",
-                               details: ["requestedAmount": amount])
+                // Use PaymentSheet for adding real funds (both test and production modes)
+                let amountInCents = Int(amount * 100)
+                let paymentSheet = try await paymentManager.createPaymentIntent(amount: amountInCents)
+                
+                // Present the payment sheet
+                if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                   let rootViewController = windowScene.windows.first?.rootViewController {
+                    
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        paymentSheet.present(from: rootViewController) { [weak self] (result: PaymentSheetResult) in
+                            guard let self = self else {
+                                continuation.resume()
+                                return
+                            }
+                            
+                            Task { @MainActor in
+                                switch result {
+                                case .completed:
+                                    print("Payment successful")
+                                    // Update balance after successful payment
+                                    let newBalance = self.balance + amount
+                                    try? await self.updateBalance(amount: newBalance)
+                                    self.logBalanceChange(oldBalance: oldBalance,
+                                                        newBalance: newBalance,
+                                                        reason: "Added \(self.paymentManager.isTestMode ? "Test" : "Production") Funds",
+                                                        details: ["requestedAmount": amount,
+                                                                "mode": self.paymentManager.isTestMode ? "test" : "production"])
+                                    self.showSuccessAlert = true
+                                    
+                                case .canceled:
+                                    print("Payment canceled")
+                                    
+                                case .failed(let error):
+                                    print("Payment failed: \(error.localizedDescription)")
+                                    self.error = error
+                                }
+                            }
+                            
+                            continuation.resume()
+                        }
+                    }
+                }
             } catch {
                 print("Failed to add funds: \(error)")
                 throw error
@@ -103,23 +145,21 @@ class TipViewModel: ObservableObject {
     
     @MainActor
     func prepareTip(amount: Double) async throws {
-        // Ensure user document exists before proceeding
-        if !paymentManager.isDevelopmentMode {
-            await loadBalance() // This will create the user document if it doesn't exist
+        // Always check balance first
+        guard amount <= balance else {
+            throw PaymentError.insufficientFunds
         }
         
         self.selectedAmount = amount
-        let amountInCents = Int(amount * 100)
-        print("Preparing tip of $\(amount) (\(amountInCents) cents)")
-        let clientSecret = try await paymentManager.createPaymentIntent(amount: amountInCents)
-        print("Payment successful with client secret: \(clientSecret)")
+        print("Preparing tip of $\(String(format: "%.2f", amount))")
         
-        // If we get here, payment was successful
-        if let amount = selectedAmount {
-            print("Successfully processed tip of $\(String(format: "%.2f", amount))")
+        do {
+            // Process tip directly from balance
+            try await processTip(amount: amount, receiverID: "", videoID: "")
             showSuccessAlert = true
-            // Refresh balance after successful tip
-            await loadBalance()
+        } catch {
+            print("Failed to process tip: \(error)")
+            throw error
         }
     }
     
@@ -243,7 +283,7 @@ class TipViewModel: ObservableObject {
                         balance = userBalance
                         logBalanceChange(oldBalance: oldBalance, 
                                        newBalance: userBalance, 
-                                       reason: "Production Balance Load")
+                                       reason: "\(paymentManager.isTestMode ? "Test" : "Production") Balance Load")
                     }
                 }
             } catch {
@@ -322,7 +362,8 @@ class TipViewModel: ObservableObject {
                 "videoID": videoID,
                 "senderID": senderID,
                 "receiverID": receiverID,
-                "transactionID": UUID().uuidString
+                "transactionID": UUID().uuidString,
+                "mode": "development"
             ]
             
             try await tipRef.setData(tipData)
@@ -341,7 +382,7 @@ class TipViewModel: ObservableObject {
             return
         }
         
-        // Production mode handling
+        // Production/Test mode handling
         await loadBalance()
         
         if balance < amount {
@@ -358,7 +399,8 @@ class TipViewModel: ObservableObject {
             "videoID": videoID,
             "senderID": senderID,
             "receiverID": receiverID,
-            "transactionID": transactionID
+            "transactionID": transactionID,
+            "mode": paymentManager.isTestMode ? "test" : "production"
         ]
         
         // Update balances and create tip record
@@ -408,7 +450,7 @@ class TipViewModel: ObservableObject {
             // Log the tip
             logBalanceChange(oldBalance: oldBalance, 
                            newBalance: balance, 
-                           reason: "Sent Tip (Production)",
+                           reason: "Sent Tip (\(paymentManager.isTestMode ? "Test" : "Production"))",
                            details: ["receiverID": receiverID,
                                    "videoID": videoID,
                                    "tipAmount": amount,

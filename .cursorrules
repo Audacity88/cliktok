@@ -16,7 +16,7 @@ You are an expert iOS developer using Swift and SwiftUI. Follow these guidelines
 #App specific:
 -iOS 18 target 
 -Don't use Package.swift
--Ignore 'No such module' errors
+-Ignore 'No such module' errors. ALWAYS FIX other linter errors.
 -The Firestore Swift extensions are now part of the FirebaseFirestore library. FirebaseFirestoreSwift has been discontinued. @https://firebase.google.com/support/release-notes/ios 
 
 #SwiftUI UI Design Rules:

@@ -45,7 +45,7 @@ struct VideoUploadView: View {
                     
                     Section(header: Text("Details")) {
                         TextField("Caption", text: $caption)
-                        TextField("Hashtags (comma separated)", text: $hashtags)
+                        HashtagTextField(text: $hashtags, placeholder: "Enter hashtags")
                     }
                     
                     Section {
@@ -125,7 +125,7 @@ struct VideoUploadView: View {
         guard let videoURL = videoURL else { return }
         
         let hashtagArray = hashtags
-            .split(separator: ",")
+            .split(separator: " ")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         

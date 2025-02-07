@@ -11,6 +11,7 @@ actor VideoAssetLoader {
     static let shared = VideoAssetLoader()
     
     private let cache: URLCache
+    private var assetCache = NSCache<NSURL, AVAsset>()
     private var loadingAssets: [URL: Task<AVAsset, Error>] = [:]
     private var prefetchTasks: [URL: Task<Void, Never>] = [:]
     
@@ -20,11 +21,17 @@ actor VideoAssetLoader {
         self.cache = URLCache(memoryCapacity: cacheSizeInBytes / 4,
                             diskCapacity: cacheSizeInBytes,
                             diskPath: "video_cache")
+        
+        // Configure asset cache
+        assetCache.countLimit = 10 // Maximum number of assets to keep in memory
+        assetCache.totalCostLimit = 256 * 1024 * 1024 // 256MB limit for asset cache
     }
     
     func prefetchAsset(for url: URL) {
-        // Don't prefetch if already loading or prefetching
-        guard loadingAssets[url] == nil, prefetchTasks[url] == nil else { return }
+        // Don't prefetch if already loading, prefetching, or in cache
+        guard loadingAssets[url] == nil, 
+              prefetchTasks[url] == nil,
+              assetCache.object(forKey: url as NSURL) == nil else { return }
         
         let task = Task {
             do {
@@ -49,8 +56,15 @@ actor VideoAssetLoader {
     }
     
     func loadAsset(for url: URL) async throws -> AVAsset {
+        // Check memory cache first
+        if let cachedAsset = assetCache.object(forKey: url as NSURL) {
+            print("Using cached asset for: \(url)")
+            return cachedAsset
+        }
+        
         // Check if we're already loading this asset
         if let existingTask = loadingAssets[url] {
+            print("Using existing loading task for: \(url)")
             return try await existingTask.value
         }
         
@@ -61,11 +75,13 @@ actor VideoAssetLoader {
             // Create URL request
             let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 60)
             
-            // Check cache
+            // Check URL cache
             if let cachedResponse = cache.cachedResponse(for: request) {
+                print("Loading asset from URL cache: \(url)")
                 let localURL = try await saveToDisk(data: cachedResponse.data)
                 asset = AVAsset(url: localURL)
             } else {
+                print("Downloading asset: \(url)")
                 // Download and cache
                 let (data, response) = try await URLSession.shared.data(for: request)
                 cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: request)
@@ -74,7 +90,11 @@ actor VideoAssetLoader {
             }
             
             // Load essential properties
-            try await asset.loadValues(forKeys: ["playable", "duration", "tracks"])
+            try await asset.load(.isPlayable, .duration, .tracks)
+            
+            // Store in memory cache
+            assetCache.setObject(asset, forKey: url as NSURL)
+            
             return asset
         }
         
@@ -100,6 +120,18 @@ actor VideoAssetLoader {
         try data.write(to: fileURL)
         return fileURL
     }
+    
+    func clearCache() {
+        assetCache.removeAllObjects()
+        cache.removeAllCachedResponses()
+        
+        // Cancel all loading and prefetch tasks
+        loadingAssets.values.forEach { $0.cancel() }
+        loadingAssets.removeAll()
+        
+        prefetchTasks.values.forEach { $0.cancel() }
+        prefetchTasks.removeAll()
+    }
 }
 
 struct VideoPlayerView: View {
@@ -124,6 +156,7 @@ struct VideoPlayerView: View {
     @State private var showPlayButton = false
     @State private var timeObserverToken: Any?
     @State private var showDeleteAlert = false
+    @State private var showEditSheet = false
     @State private var creator: User?
     let onPrefetch: (([Video]) -> Void)?
     
@@ -169,7 +202,7 @@ struct VideoPlayerView: View {
                         .edgesIgnoringSafeArea(.all)
                 }
                 
-                // Back Button
+                // Back Button and Menu
                 VStack {
                     if showBackButton {
                         HStack {
@@ -190,6 +223,12 @@ struct VideoPlayerView: View {
                             // Add three-dot menu if user owns the video
                             if video.userID == Auth.auth().currentUser?.uid {
                                 Menu {
+                                    Button {
+                                        showEditSheet = true
+                                    } label: {
+                                        Label("Edit Video", systemImage: "pencil")
+                                    }
+                                    
                                     Button(role: .destructive) {
                                         showDeleteAlert = true
                                     } label: {
@@ -200,30 +239,42 @@ struct VideoPlayerView: View {
                                         .font(.title2)
                                         .foregroundColor(.white)
                                         .shadow(radius: 2)
+                                        .frame(width: 44, height: 44) // Increase touch target
+                                        .contentShape(Rectangle()) // Make entire frame tappable
                                 }
                                 .padding(.trailing)
                             }
                         }
                         .padding(.top, 50)
-                    } else if video.userID == Auth.auth().currentUser?.uid {
-                        // Show delete menu even when back button is hidden
-                        HStack {
-                            Spacer()
-                            Menu {
-                                Button(role: .destructive) {
-                                    showDeleteAlert = true
+                    } else {
+                        // Show menu even when back button is hidden
+                        if video.userID == Auth.auth().currentUser?.uid {
+                            HStack {
+                                Spacer()
+                                Menu {
+                                    Button {
+                                        showEditSheet = true
+                                    } label: {
+                                        Label("Edit Video", systemImage: "pencil")
+                                    }
+                                    
+                                    Button(role: .destructive) {
+                                        showDeleteAlert = true
+                                    } label: {
+                                        Label("Delete Video", systemImage: "trash")
+                                    }
                                 } label: {
-                                    Label("Delete Video", systemImage: "trash")
+                                    Image(systemName: "ellipsis")
+                                        .font(.title2)
+                                        .foregroundColor(.white)
+                                        .shadow(radius: 2)
+                                        .frame(width: 44, height: 44) // Increase touch target
+                                        .contentShape(Rectangle()) // Make entire frame tappable
                                 }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .shadow(radius: 2)
+                                .padding(.trailing)
                             }
-                            .padding(.trailing)
+                            .padding(.top, 50)
                         }
-                        .padding(.top, 50)
                     }
                     
                     Spacer()
@@ -397,6 +448,21 @@ struct VideoPlayerView: View {
             }
             .onDisappear {
                 cleanupPlayer()
+            }
+            .onChange(of: showEditSheet) { oldValue, newValue in
+                if newValue {
+                    // Just pause the video when edit sheet is shown
+                    player?.pause()
+                    isPlaying = false
+                } else {
+                    // Resume playing from current position when edit sheet is dismissed
+                    player?.play()
+                    isPlaying = true
+                }
+            }
+            .sheet(isPresented: $showEditSheet) {
+                VideoEditView(video: video, isPresented: $showEditSheet)
+                    .environmentObject(feedViewModel)
             }
             .alert("Add Funds", isPresented: $showAddFundsAlert) {
                 Button("Add Funds") {

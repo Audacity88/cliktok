@@ -6,8 +6,8 @@ struct Video: Identifiable, Codable {
     let userID: String
     let videoURL: String
     let thumbnailURL: String?
-    let caption: String
-    let hashtags: [String]
+    var caption: String
+    var hashtags: [String]
     let createdAt: Date
     var likes: Int
     var views: Int

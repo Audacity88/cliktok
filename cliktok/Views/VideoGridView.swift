@@ -1,10 +1,13 @@
 import SwiftUI
 import AVKit
+import FirebaseAuth
 
 struct VideoGridView: View {
     let videos: [Video]
     let showBackButton: Bool
     @State private var selectedVideo: Video?
+    @State private var showEditSheet = false
+    @State private var videoToEdit: Video?
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     
     private let columns = [
@@ -16,19 +19,48 @@ struct VideoGridView: View {
     var body: some View {
         LazyVGrid(columns: columns, spacing: 1) {
             ForEach(videos) { video in
-                VideoThumbnailView(video: video)
-                    .aspectRatio(9/16, contentMode: .fill)
-                    .frame(height: 180)
-                    .clipped()
-                    .onTapGesture {
-                        selectedVideo = video
-                    }
+                ZStack {
+                    VideoThumbnailView(video: video)
+                        .aspectRatio(9/16, contentMode: .fill)
+                        .frame(height: 180)
+                        .clipped()
+                    
+                    // Invisible overlay for better touch handling
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedVideo = video
+                        }
+                        .contextMenu {
+                            if video.userID == Auth.auth().currentUser?.uid {
+                                Button(action: {
+                                    videoToEdit = video
+                                    showEditSheet = true
+                                }) {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                
+                                Button(role: .destructive, action: {
+                                    videoToEdit = video
+                                    showEditSheet = true
+                                }) {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                }
             }
         }
         .fullScreenCover(item: $selectedVideo) { video in
             VideoPlayerView(video: video, showBackButton: showBackButton)
                 .environmentObject(feedViewModel)
                 .edgesIgnoringSafeArea(.all)
+        }
+        .sheet(isPresented: $showEditSheet) {
+            if let video = videoToEdit {
+                VideoEditView(video: video, isPresented: $showEditSheet)
+                    .environmentObject(feedViewModel)
+            }
         }
     }
 }

@@ -63,13 +63,23 @@ struct ContentView: View {
                     .tag(0)
                     
                     NavigationStack {
+                        HashtagSearchView()
+                            .environmentObject(feedViewModel)
+                    }
+                    .tabItem {
+                        Image(systemName: "magnifyingglass")
+                        Text("Search")
+                    }
+                    .tag(1)
+                    
+                    NavigationStack {
                         WalletView()
                     }
                     .tabItem {
                         Image(systemName: "dollarsign.circle.fill")
                         Text("Wallet")
                     }
-                    .tag(1)
+                    .tag(2)
                     
                     Button(action: {
                         showingVideoUpload = true
@@ -81,7 +91,7 @@ struct ContentView: View {
                         Image(systemName: "plus.square.fill")
                         Text("Upload")
                     }
-                    .tag(2)
+                    .tag(3)
                     
                     NavigationStack {
                         ProfileView()
@@ -91,7 +101,7 @@ struct ContentView: View {
                         Image(systemName: "person.fill")
                         Text("Profile")
                     }
-                    .tag(3)
+                    .tag(4)
                 }
                 .sheet(isPresented: $showingVideoUpload) {
                     VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
