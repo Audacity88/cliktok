@@ -24,6 +24,20 @@ struct VideoUploadView: View {
                 GuestRestrictedView()
             } else {
                 Form {
+                    if viewModel.isUserMarketer {
+                        Section(header: Text("Marketing Options").foregroundColor(.blue)) {
+                            Toggle(isOn: $viewModel.isAdvertisement) {
+                                Label {
+                                    Text("Mark as Advertisement")
+                                } icon: {
+                                    Image(systemName: "megaphone.fill")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                    
                     Section {
                         PhotosPicker(selection: $selectedItem,
                                    matching: .videos,
@@ -46,10 +60,6 @@ struct VideoUploadView: View {
                     Section(header: Text("Details")) {
                         TextField("Caption", text: $caption)
                         HashtagTextField(text: $hashtags, placeholder: "Enter hashtags")
-                        
-                        if viewModel.isUserMarketer {
-                            Toggle("Mark as Advertisement", isOn: $viewModel.isAdvertisement)
-                        }
                     }
                     
                     Section {
@@ -63,7 +73,7 @@ struct VideoUploadView: View {
                         .disabled(videoURL == nil || caption.isEmpty || viewModel.isUploading)
                     }
                 }
-                .navigationTitle("Upload Video")
+                .navigationTitle(viewModel.isUserMarketer ? "Upload Marketing Video" : "Upload Video")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
@@ -90,6 +100,9 @@ struct VideoUploadView: View {
             }
         }
         .onAppear {
+            // Check marketer status immediately when view appears
+            viewModel.checkMarketerStatus()
+            
             viewModel.onUploadComplete = {
                 Task {
                     scrollToTop = true
@@ -98,6 +111,9 @@ struct VideoUploadView: View {
                     onDismiss()
                 }
             }
+        }
+        .onChange(of: AuthenticationManager.shared.isMarketer) { oldValue, newValue in
+            viewModel.checkMarketerStatus()
         }
     }
     

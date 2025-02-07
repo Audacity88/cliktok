@@ -10,6 +10,7 @@ struct ProfileView: View {
     @State private var bio = ""
     @State private var selectedItem: PhotosPickerItem?
     @State private var selectedImageData: Data?
+    @State private var showingSignOutAlert = false
     
     let userId: String?
     
@@ -72,13 +73,43 @@ struct ProfileView: View {
                 if let data = try? await newItem?.loadTransferable(type: Data.self) {
                     selectedImageData = data
                     if let image = UIImage(data: data) {
-                        if let url = try? await viewModel.uploadProfileImage(image) {
-                            print("Successfully uploaded profile image: \(url)")
+                        do {
+                            if let url = try await viewModel.uploadProfileImage(image) {
+                                print("Successfully uploaded profile image: \(url)")
+                                // Refresh user data to get updated profile image URL
+                                if checkIsCurrentUser() {
+                                    await viewModel.fetchCurrentUser()
+                                } else if let userId = userId {
+                                    await viewModel.fetchUser(userId: userId)
+                                }
+                            }
+                        } catch {
+                            print("Error uploading profile image: \(error)")
                         }
                     }
                 }
                 selectedItem = nil
             }
+        }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showingSignOutAlert = true
+                }) {
+                    Text("Sign Out")
+                        .foregroundColor(.red)
+                }
+            }
+        }
+        .alert("Sign Out", isPresented: $showingSignOutAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Sign Out", role: .destructive) {
+                Task {
+                    try? AuthenticationManager.shared.signOut()
+                }
+            }
+        } message: {
+            Text("Are you sure you want to sign out?")
         }
     }
 }
@@ -135,31 +166,59 @@ struct ProfileContentView: View {
             VStack(spacing: 20) {
                 // Profile Header
                 VStack(spacing: 16) {
-                    // Profile Image
-                    if let profileImageURL = user.profileImageURL,
-                       let url = URL(string: profileImageURL) {
-                        AsyncImage(url: url) { image in
-                            image
+                    // Profile Image with PhotosPicker
+                    ZStack {
+                        if let selectedImageData,
+                           let uiImage = UIImage(data: selectedImageData) {
+                            Image(uiImage: uiImage)
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 100, height: 100)
                                 .clipShape(Circle())
-                        } placeholder: {
+                        } else if let profileImageURL = user.profileImageURL,
+                                  let url = URL(string: profileImageURL) {
+                            AsyncImage(url: url) { image in
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 100, height: 100)
+                                    .clipShape(Circle())
+                            } placeholder: {
+                                Circle()
+                                    .fill(Color.gray.opacity(0.3))
+                                    .frame(width: 100, height: 100)
+                            }
+                        } else {
                             Circle()
                                 .fill(Color.gray.opacity(0.3))
                                 .frame(width: 100, height: 100)
+                                .overlay(
+                                    Image(systemName: "person.fill")
+                                        .resizable()
+                                        .scaledToFit()
+                                        .frame(width: 60, height: 60)
+                                        .foregroundColor(.gray)
+                                )
                         }
-                    } else {
-                        Circle()
-                            .fill(Color.gray.opacity(0.3))
-                            .frame(width: 100, height: 100)
-                            .overlay(
-                                Image(systemName: "person.fill")
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 60, height: 60)
-                                    .foregroundColor(.gray)
-                            )
+                        
+                        if canEdit {
+                            PhotosPicker(
+                                selection: $selectedItem,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Circle()
+                                    .fill(Color.black.opacity(0.4))
+                                    .frame(width: 100, height: 100)
+                                    .overlay(
+                                        Image(systemName: "camera.fill")
+                                            .foregroundColor(.white)
+                                            .font(.system(size: 30))
+                                    )
+                                    .opacity(0)
+                                    .hoverEffect()
+                            }
+                        }
                     }
                     
                     if isEditing {
@@ -195,15 +254,11 @@ struct ProfileContentView: View {
                 // Edit Profile Button
                 if canEdit && !isEditing {
                     Button(action: {
-                        if isEditing {
-                            isEditing = false
-                        } else {
-                            displayName = user.displayName
-                            bio = user.bio
-                            isEditing = true
-                        }
+                        displayName = user.displayName
+                        bio = user.bio
+                        isEditing = true
                     }) {
-                        Text(isEditing ? "Cancel" : "Edit Profile")
+                        Text("Edit Profile")
                             .foregroundColor(.white)
                             .frame(width: 200)
                             .padding()
@@ -229,10 +284,35 @@ struct ProfileEditForm: View {
     @Binding var bio: String
     @Binding var isEditing: Bool
     @ObservedObject var viewModel: UserViewModel
+    @State private var username: String = ""
+    @State private var showUsernameError = false
+    @State private var isMarketer: Bool = false
+    @State private var showAlert = false
+    @State private var alertMessage = ""
     
     var body: some View {
         VStack(spacing: 16) {
-            TextField("Display Name", text: $displayName)
+            // Username field with validation
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Username", text: $username)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .autocapitalization(.none)
+                    .disableAutocorrection(true)
+                    .onChange(of: username) { _ in
+                        showUsernameError = false
+                        viewModel.usernameError = nil
+                    }
+                    .padding(.horizontal)
+                
+                if let error = viewModel.usernameError {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .padding(.horizontal)
+                }
+            }
+            
+            TextField(isMarketer ? "Brand/Company Name" : "Display Name", text: $displayName)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding(.horizontal)
             
@@ -240,20 +320,69 @@ struct ProfileEditForm: View {
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding(.horizontal)
             
-            Button("Save") {
+            // Marketer Options
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: $isMarketer) {
+                    Label {
+                        Text("Brand Account")
+                    } icon: {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundColor(.blue)
+                    }
+                }
+                .tint(.blue)
+                .padding(.horizontal)
+            }
+            .padding(.vertical, 8)
+            
+            Button("Save Profile") {
                 Task {
                     do {
+                        // Only update username if it has changed
+                        if username != viewModel.currentUser?.username {
+                            try await viewModel.updateUsername(username)
+                        }
+                        
+                        // Update user role if changed
+                        let currentIsMarketer = viewModel.currentUser?.userRole == .marketer
+                        if isMarketer != currentIsMarketer {
+                            try await viewModel.updateUserRole(
+                                asMarketer: isMarketer,
+                                companyName: isMarketer ? displayName : nil
+                            )
+                        }
+                        
+                        // Update other profile fields
                         try await viewModel.updateProfile(
                             displayName: displayName,
                             bio: bio
                         )
                         isEditing = false
                     } catch {
-                        print("Error updating profile: \(error)")
+                        if viewModel.usernameError == nil {
+                            alertMessage = error.localizedDescription
+                            showAlert = true
+                        }
                     }
                 }
             }
             .buttonStyle(.borderedProminent)
+            .disabled(viewModel.usernameError != nil || displayName.isEmpty)
+            
+            Button("Cancel") {
+                isEditing = false
+            }
+            .buttonStyle(.bordered)
+        }
+        .onAppear {
+            // Initialize fields with current values
+            username = viewModel.currentUser?.username ?? ""
+            isMarketer = viewModel.currentUser?.userRole == .marketer
+        }
+        .alert("Error", isPresented: $showAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(alertMessage)
         }
     }
 }
@@ -267,6 +396,21 @@ struct ProfileInfoView: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Brand Account Badge for Marketers
+            if user.userRole == .marketer {
+                HStack {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundColor(.blue)
+                    Text("Brand Account")
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                }
+                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(8)
+            }
+            
             Text(user.displayName)
                 .font(.title2)
                 .bold()
@@ -292,6 +436,15 @@ struct ProfileInfoView: View {
                         .font(.headline)
                     Text("Views")
                         .foregroundColor(.gray)
+                }
+                
+                if user.userRole == .marketer {
+                    VStack {
+                        Text("\(viewModel.userVideos.filter { $0.isAdvertisement ?? false }.count)")
+                            .font(.headline)
+                        Text("Ads")
+                            .foregroundColor(.gray)
+                    }
                 }
             }
             .padding(.top, 10)

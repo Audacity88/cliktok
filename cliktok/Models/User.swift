@@ -10,6 +10,7 @@ enum UserRole: String, Codable {
 struct User: Codable, Identifiable {
     @DocumentID var id: String?
     var email: String
+    var username: String
     var displayName: String
     var bio: String
     var profileImageURL: String?
@@ -18,14 +19,10 @@ struct User: Codable, Identifiable {
     var userRole: UserRole
     var companyName: String?
     
-    var username: String {
-        // Use email without domain as username
-        email.components(separatedBy: "@").first ?? email
-    }
-    
     enum CodingKeys: String, CodingKey {
         case id
         case email
+        case username
         case displayName = "displayName"
         case bio
         case profileImageURL = "profileImageURL"
@@ -37,6 +34,7 @@ struct User: Codable, Identifiable {
     
     init(id: String? = nil,
          email: String,
+         username: String,
          displayName: String,
          bio: String,
          profileImageURL: String? = nil,
@@ -46,6 +44,7 @@ struct User: Codable, Identifiable {
          companyName: String? = nil) {
         self.id = id
         self.email = email
+        self.username = username
         self.displayName = displayName
         self.bio = bio
         self.profileImageURL = profileImageURL

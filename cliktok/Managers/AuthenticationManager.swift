@@ -9,7 +9,14 @@ class AuthenticationManager: ObservableObject {
     @Published var isAuthenticated = false
     @Published var userEmail: String?
     @Published var isAnonymous = false
-    @Published var isMarketer = false
+    @Published var isMarketer = false {
+        didSet {
+            if oldValue != isMarketer {
+                print("AuthManager: Marketer status changed to: \(isMarketer)")
+                NotificationCenter.default.post(name: .init("UserRoleChanged"), object: nil)
+            }
+        }
+    }
     
     private let db = Firestore.firestore()
     
@@ -25,6 +32,8 @@ class AuthenticationManager: ObservableObject {
                 self?.isAnonymous = user?.isAnonymous ?? false
                 if let user = user {
                     await self?.checkIfMarketer(userId: user.uid)
+                } else {
+                    self?.isMarketer = false
                 }
             }
         }
@@ -32,13 +41,22 @@ class AuthenticationManager: ObservableObject {
     
     private func checkIfMarketer(userId: String) async {
         do {
+            print("AuthManager: Checking marketer status for user: \(userId)")
             let docRef = db.collection("users").document(userId)
             let document = try await docRef.getDocument()
-            if let userData = try? document.data(as: User.self) {
-                self.isMarketer = userData.userRole == .marketer
+            
+            if let data = document.data() {
+                print("AuthManager: User data: \(data)")
+                let userRole = data["userRole"] as? String
+                self.isMarketer = userRole == UserRole.marketer.rawValue
+                print("AuthManager: Set marketer status to: \(self.isMarketer)")
+            } else {
+                print("AuthManager: No user data found")
+                self.isMarketer = false
             }
         } catch {
-            print("Error checking marketer status: \(error)")
+            print("AuthManager: Error checking marketer status: \(error)")
+            self.isMarketer = false
         }
     }
     
@@ -63,10 +81,13 @@ class AuthenticationManager: ObservableObject {
         self.userEmail = result.user.email
         self.isAnonymous = false
         
+        let username = "user_\(result.user.uid.prefix(6))"
+        
         // Create regular user profile
         let user = User(
             id: result.user.uid,
             email: email,
+            username: username,
             displayName: email.components(separatedBy: "@").first ?? "",
             bio: "",
             userRole: .regular
@@ -82,11 +103,14 @@ class AuthenticationManager: ObservableObject {
         self.isAnonymous = false
         self.isMarketer = true
         
+        let username = "marketer_\(result.user.uid.prefix(6))"
+        
         // Create marketer user profile
         let user = User(
             id: result.user.uid,
             email: email,
-            displayName: email.components(separatedBy: "@").first ?? "",
+            username: username,
+            displayName: companyName,
             bio: "",
             userRole: .marketer,
             companyName: companyName
@@ -111,6 +135,19 @@ class AuthenticationManager: ObservableObject {
         
         let credential = EmailAuthProvider.credential(withEmail: email, password: password)
         let result = try await user.link(with: credential)
+        
+        // Update user profile with email and username
+        let username = "user_\(result.user.uid.prefix(6))"
+        let userProfile = User(
+            id: result.user.uid,
+            email: email,
+            username: username,
+            displayName: email.components(separatedBy: "@").first ?? "",
+            bio: "",
+            userRole: .regular
+        )
+        
+        try await db.collection("users").document(result.user.uid).setData(from: userProfile)
         
         self.isAuthenticated = true
         self.userEmail = result.user.email

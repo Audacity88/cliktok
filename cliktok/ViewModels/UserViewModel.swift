@@ -11,6 +11,7 @@ class UserViewModel: ObservableObject {
     @Published var userVideos: [Video] = []
     @Published var isLoading = false
     @Published var error: Error?
+    @Published var usernameError: String?
     
     private let db = Firestore.firestore()
     private let storage = Storage.storage()
@@ -52,6 +53,7 @@ class UserViewModel: ObservableObject {
                 return User(
                     id: userId,
                     email: data["email"] as? String ?? Auth.auth().currentUser?.email ?? "",
+                    username: data["username"] as? String ?? "",
                     displayName: data["displayName"] as? String ?? "",
                     bio: data["bio"] as? String ?? "",
                     profileImageURL: data["profileImageURL"] as? String,
@@ -68,6 +70,57 @@ class UserViewModel: ObservableObject {
         return nil
     }
     
+    func isUsernameAvailable(_ username: String) async -> Bool {
+        do {
+            let snapshot = try await db.collection("users")
+                .whereField("username", isEqualTo: username)
+                .getDocuments()
+            return snapshot.documents.isEmpty
+        } catch {
+            print("Error checking username availability: \(error)")
+            return false
+        }
+    }
+    
+    func validateUsername(_ username: String) -> Bool {
+        // Username must be 3-20 characters, alphanumeric with underscores only
+        let usernameRegex = "^[a-zA-Z0-9_]{3,20}$"
+        let usernamePredicate = NSPredicate(format: "SELF MATCHES %@", usernameRegex)
+        return usernamePredicate.evaluate(with: username)
+    }
+    
+    func updateUsername(_ newUsername: String) async throws {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        
+        // Reset error
+        usernameError = nil
+        
+        // Validate username format
+        guard validateUsername(newUsername) else {
+            usernameError = "Username must be 3-20 characters and contain only letters, numbers, and underscores"
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: usernameError!])
+        }
+        
+        // Check availability
+        guard await isUsernameAvailable(newUsername) else {
+            usernameError = "Username is already taken"
+            throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: usernameError!])
+        }
+        
+        let userData: [String: Any] = [
+            "username": newUsername,
+            "updatedAt": Timestamp()
+        ]
+        
+        try await db.collection("users").document(userId).updateData(userData)
+        
+        // Update local user object
+        if var updatedUser = currentUser {
+            updatedUser.username = newUsername
+            currentUser = updatedUser
+        }
+    }
+    
     func createUserProfile(username: String, displayName: String, bio: String) async throws {
         guard let userId = Auth.auth().currentUser?.uid,
               let email = Auth.auth().currentUser?.email else { return }
@@ -76,6 +129,7 @@ class UserViewModel: ObservableObject {
         let user = User(
             id: userId,
             email: email,
+            username: username,
             displayName: displayName,
             bio: bio,
             profileImageURL: nil,
@@ -85,6 +139,7 @@ class UserViewModel: ObservableObject {
         
         try await db.collection("users").document(userId).setData([
             "email": email,
+            "username": username,
             "displayName": displayName,
             "bio": bio,
             "isPrivateAccount": false,
@@ -113,6 +168,34 @@ class UserViewModel: ObservableObject {
             updatedUser.displayName = displayName
             updatedUser.bio = bio
             currentUser = updatedUser
+        }
+    }
+    
+    func updateUserRole(asMarketer: Bool, companyName: String?) async throws {
+        guard let userId = Auth.auth().currentUser?.uid else { return }
+        
+        var userData: [String: Any] = [
+            "userRole": asMarketer ? UserRole.marketer.rawValue : UserRole.regular.rawValue,
+            "updatedAt": Timestamp()
+        ]
+        
+        if let companyName = companyName {
+            userData["companyName"] = companyName
+        } else if !asMarketer {
+            // Remove company name if switching back to regular user
+            userData["companyName"] = FieldValue.delete()
+        }
+        
+        try await db.collection("users").document(userId).updateData(userData)
+        
+        // Update local user object
+        if var updatedUser = currentUser {
+            updatedUser.userRole = asMarketer ? .marketer : .regular
+            updatedUser.companyName = companyName
+            currentUser = updatedUser
+            
+            // Update AuthenticationManager
+            AuthenticationManager.shared.isMarketer = asMarketer
         }
     }
     
@@ -151,23 +234,34 @@ class UserViewModel: ObservableObject {
         guard let userId = Auth.auth().currentUser?.uid,
               let imageData = image.jpegData(compressionQuality: 0.7) else { return nil }
         
-        let storageRef = storage.reference().child("profile_images/\(userId).jpg")
-        _ = try await storageRef.putDataAsync(imageData)
-        let downloadURL = try await storageRef.downloadURL()
+        let storageRef = storage.reference().child("profile_images").child(userId)
         
-        // Update Firestore with new profile image URL
-        try await db.collection("users").document(userId).updateData([
-            "profileImageURL": downloadURL.absoluteString,
-            "updatedAt": Timestamp()
-        ])
-        
-        // Update local user object
-        if var updatedUser = currentUser {
-            updatedUser.profileImageURL = downloadURL.absoluteString
-            currentUser = updatedUser
+        do {
+            // Upload the image data
+            let metadata = StorageMetadata()
+            metadata.contentType = "image/jpeg"
+            _ = try await storageRef.putDataAsync(imageData, metadata: metadata)
+            
+            // Get the download URL
+            let downloadURL = try await storageRef.downloadURL()
+            
+            // Update Firestore with new profile image URL
+            try await db.collection("users").document(userId).updateData([
+                "profileImageURL": downloadURL.absoluteString,
+                "updatedAt": Timestamp()
+            ])
+            
+            // Update local user object
+            if var updatedUser = currentUser {
+                updatedUser.profileImageURL = downloadURL.absoluteString
+                currentUser = updatedUser
+            }
+            
+            return downloadURL.absoluteString
+        } catch {
+            print("Error uploading profile image: \(error)")
+            throw error
         }
-        
-        return downloadURL.absoluteString
     }
     
     func togglePrivateAccount() async throws {

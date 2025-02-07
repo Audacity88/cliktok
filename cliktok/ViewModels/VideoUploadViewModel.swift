@@ -4,6 +4,7 @@ import FirebaseFirestore
 import PhotosUI
 import AVFoundation
 import OSLog
+import Combine
 
 @MainActor
 class VideoUploadViewModel: ObservableObject {
@@ -11,34 +12,44 @@ class VideoUploadViewModel: ObservableObject {
     @Published var progress: Double = 0
     @Published var error: Error?
     @Published var isAdvertisement = false
-    @Published var isUserMarketer = false
+    @Published var isUserMarketer = false {
+        didSet {
+            print("VideoUploadViewModel: isUserMarketer changed to: \(isUserMarketer)")
+        }
+    }
     
     var onUploadComplete: (() -> Void)?
+    private var cancellables = Set<AnyCancellable>()
     
     private let storage = Storage.storage()
     private let db = Firestore.firestore()
     private let logger = Logger(subsystem: "gauntletai.cliktok", category: "VideoUploadViewModel")
+    private let authManager = AuthenticationManager.shared
     
     init() {
-        Task {
-            await checkMarketerStatus()
-        }
+        print("VideoUploadViewModel: Initializing...")
+        // Set initial marketer status
+        isUserMarketer = authManager.isMarketer
+        print("VideoUploadViewModel: Initial marketer status set to: \(isUserMarketer)")
+        
+        // Observe changes to marketer status using Combine
+        NotificationCenter.default
+            .publisher(for: .init("UserRoleChanged"))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                print("VideoUploadViewModel: Received UserRoleChanged notification")
+                self.isUserMarketer = self.authManager.isMarketer
+                print("VideoUploadViewModel: Updated marketer status to: \(self.isUserMarketer)")
+            }
+            .store(in: &cancellables)
     }
     
-    private func checkMarketerStatus() async {
-        if let user = AuthenticationManager.shared.currentUser {
-            do {
-                let docRef = db.collection("users").document(user.uid)
-                let document = try await docRef.getDocument()
-                if let userData = try? document.data(as: User.self) {
-                    await MainActor.run {
-                        self.isUserMarketer = userData.userRole == .marketer
-                    }
-                }
-            } catch {
-                logger.error("Error checking marketer status: \(error.localizedDescription)")
-            }
-        }
+    func checkMarketerStatus() {
+        print("VideoUploadViewModel: Checking marketer status...")
+        let oldValue = isUserMarketer
+        isUserMarketer = authManager.isMarketer
+        print("VideoUploadViewModel: Marketer status changed from \(oldValue) to \(isUserMarketer)")
     }
     
     func uploadVideo(videoURL: URL, caption: String, hashtags: [String]) async throws {

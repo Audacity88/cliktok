@@ -82,6 +82,7 @@ class VideoFeedViewModel: ObservableObject {
                             let user = User(
                                 id: creatorId,
                                 email: data["email"] as? String ?? "",
+                                username: data["username"] as? String ?? "",
                                 displayName: data["displayName"] as? String ?? "",
                                 bio: data["bio"] as? String ?? "",
                                 profileImageURL: data["profileImageURL"] as? String,

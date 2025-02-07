@@ -7,7 +7,7 @@ struct MarketerSignUpView: View {
     
     @State private var email = ""
     @State private var password = ""
-    @State private var companyName = ""
+    @State private var displayName = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
     @State private var showAlert = false
@@ -15,8 +15,8 @@ struct MarketerSignUpView: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(header: Text("Company Information")) {
-                    TextField("Company Name", text: $companyName)
+                Section(header: Text("Brand Information")) {
+                    TextField("Brand/Company Name", text: $displayName)
                 }
                 
                 Section(header: Text("Account Details")) {
@@ -51,7 +51,7 @@ struct MarketerSignUpView: View {
     }
     
     private var isValidInput: Bool {
-        !email.isEmpty && !password.isEmpty && !companyName.isEmpty && password.count >= 6
+        !email.isEmpty && !password.isEmpty && !displayName.isEmpty && password.count >= 6
     }
     
     private func signUp() {
@@ -63,7 +63,7 @@ struct MarketerSignUpView: View {
                 try await authManager.signUpAsMarketer(
                     email: email,
                     password: password,
-                    companyName: companyName
+                    companyName: displayName
                 )
                 dismiss()
             } catch {
