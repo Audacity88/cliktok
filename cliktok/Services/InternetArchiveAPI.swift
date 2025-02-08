@@ -127,8 +127,51 @@ extension InternetArchiveAPI {
     static let baseURL = "https://archive.org"
     
     static func getVideoURL(identifier: String, filename: String) -> URL {
+        // First try to get a direct download URL
         let encodedFilename = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
-        return URL(string: "\(baseURL)/download/\(identifier)/\(encodedFilename)")!
+        let directURL = URL(string: "\(baseURL)/download/\(identifier)/\(encodedFilename)")!
+        
+        // For certain formats, try to get an alternative streaming URL
+        if filename.hasSuffix(".m4v") {
+            // Try mp4 version first
+            let mp4Filename = filename.replacingOccurrences(of: ".m4v", with: ".mp4")
+            return URL(string: "\(baseURL)/download/\(identifier)/\(mp4Filename)")!
+        }
+        
+        // For older formats, try to get the streaming version
+        if filename.hasSuffix(".avi") || filename.hasSuffix(".rm") || filename.hasSuffix(".wmv") {
+            // Look for _512kb.mp4 version
+            let streamingFilename = filename.replacingOccurrences(
+                of: #"\.(?:avi|rm|wmv)$"#,
+                with: "_512kb.mp4",
+                options: .regularExpression
+            )
+            return URL(string: "\(baseURL)/download/\(identifier)/\(streamingFilename)")!
+        }
+        
+        // Try alternative URL formats for problematic files
+        if filename.hasSuffix(".mp4") {
+            // Try with _512kb suffix first
+            let streamingFilename = filename.replacingOccurrences(of: ".mp4", with: "_512kb.mp4")
+            let streamingURL = URL(string: "\(baseURL)/download/\(identifier)/\(streamingFilename)")!
+            
+            // Try with h264 suffix as fallback
+            let h264Filename = filename.replacingOccurrences(of: ".mp4", with: "_h264.mp4")
+            let h264URL = URL(string: "\(baseURL)/download/\(identifier)/\(h264Filename)")!
+            
+            // Try with original filename but different path format
+            let altURL = URL(string: "\(baseURL)/serve/\(identifier)/\(encodedFilename)")
+            
+            // Return the first valid URL
+            if let altURL = altURL {
+                return altURL
+            }
+            
+            // Default to streaming version if available
+            return streamingURL
+        }
+        
+        return directURL
     }
     
     static func getThumbnailURL(identifier: String) -> URL {
@@ -257,52 +300,69 @@ actor InternetArchiveAPI {
         // First pass: collect all video files and check for MP4 versions
         var videoMap: [String: [(InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)]] = [:]
         
+        // Define preferred formats and their priorities
+        let preferredFormats = [
+            "512kb.mp4": 1,
+            "mp4": 2,
+            "h.264": 3,
+            "mpeg4": 4,
+            "m4v": 5,
+            "mov": 6,
+            "ogv": 7
+        ]
+        
         for file in metadata.files {
             // Debug print file info
             print("InternetArchiveAPI: Checking file: \(file.name), format: \(file.format ?? "nil")")
             
-            // For Prelinger archives, check for specific formats and extensions
-            let prelingerFormats = [
-                "h.264", "mpeg4", "mp4", "mpeg2", "ogv",
-                "512kb", "256kb", "64kb"
-            ]
-            
-            let isVideoFormat = file.format?.lowercased().contains { char in
-                ["mp4", "mpeg", "h.264", "mpeg4", "ogg video", "mpeg2"].contains { format in
-                    file.format?.lowercased().contains(format) ?? false
-                }
-            } ?? false
-            
-            let isPotentialVideo = prelingerFormats.contains { format in
-                file.name.lowercased().contains(format)
+            // Skip files that are clearly derivatives or thumbnails
+            if file.name.contains("_thumb") || file.name.contains("_small") || 
+               file.name.contains("_preview") || file.name.contains(".gif") ||
+               file.name.contains("_pixels") || file.name.contains(".rm") ||
+               file.name.contains("_meta") || file.name.contains(".srt") ||
+               file.name.contains(".vtt") || file.name.contains("_reviews") ||
+               file.name.contains("_archive") || file.name.contains("_files") ||
+               file.name.contains("_meta.xml") || file.name.contains(".sqlite") ||
+               file.name.contains(".torrent") || file.name.contains("__ia_thumb") {
+                print("InternetArchiveAPI: Skipping derivative file: \(file.name)")
+                continue
             }
             
-            if isVideoFormat || isPotentialVideo {
-                // Skip files that are clearly derivatives or thumbnails
-                if file.name.contains("_thumb") || file.name.contains("_small") || 
-                   file.name.contains("_preview") || file.name.contains(".gif") ||
-                   file.name.contains("_pixels") || file.name.contains(".rm") {
-                    print("InternetArchiveAPI: Skipping derivative file: \(file.name)")
-                    continue
-                }
+            // Skip very small files (likely thumbnails or previews)
+            if let size = file.size, let sizeInt = Int(size), sizeInt < 1000000 {
+                print("InternetArchiveAPI: Skipping small file: \(file.name) (\(size) bytes)")
+                continue
+            }
+            
+            // Skip files marked as derivatives
+            if file.source?.lowercased() == "derivative" {
+                print("InternetArchiveAPI: Skipping derivative source file: \(file.name)")
+                continue
+            }
+            
+            // Check if this is a video file
+            let isVideoFile = preferredFormats.keys.contains { format in
+                file.name.lowercased().contains(format.lowercased()) ||
+                (file.format?.lowercased().contains(format.lowercased()) ?? false)
+            }
+            
+            if isVideoFile {
+                // Get the priority for this format
+                let priority = preferredFormats.first { format, _ in
+                    file.name.lowercased().contains(format.lowercased()) ||
+                    (file.format?.lowercased().contains(format.lowercased()) ?? false)
+                }?.value ?? 999
                 
-                // Skip very small files (likely thumbnails or previews)
-                if let size = file.size, let sizeInt = Int(size), sizeInt < 1000000 {
-                    print("InternetArchiveAPI: Skipping small file: \(file.name) (\(size) bytes)")
-                    continue
-                }
-                
-                // Determine format
-                let format = file.videoFormat ?? .mp4  // Default to mp4 for Prelinger files
-                
+                let format = file.videoFormat ?? .mp4
                 let baseTitle = file.title ?? metadata.metadata.title ?? file.name
                 let key = baseTitle.lowercased()
                 
                 if videoMap[key] == nil {
                     videoMap[key] = []
                 }
+                
                 videoMap[key]?.append((file, format))
-                print("InternetArchiveAPI: Added potential video file: \(file.name)")
+                print("InternetArchiveAPI: Added video file: \(file.name) with priority \(priority)")
             }
         }
         
@@ -312,9 +372,9 @@ actor InternetArchiveAPI {
         var bestFormatVideos: [ArchiveVideo] = []
         
         for (_, variants) in videoMap {
-            // Sort variants by format priority and prefer 512kb versions for Prelinger
+            // Sort variants by format priority and prefer 512kb versions
             let sortedVariants = variants.sorted { (a, b) -> Bool in
-                // Prefer 512kb versions
+                // Always prefer 512kb versions
                 if a.0.name.contains("512kb") && !b.0.name.contains("512kb") {
                     return true
                 }
@@ -335,10 +395,11 @@ actor InternetArchiveAPI {
             
             if let bestVariant = sortedVariants.first {
                 let file = bestVariant.0
+                let videoURL = Self.getVideoURL(identifier: metadata.metadata.identifier, filename: file.name).absoluteString
                 
                 let video = ArchiveVideo(
                     title: file.title ?? metadata.metadata.title ?? file.name,
-                    videoURL: Self.getVideoURL(identifier: metadata.metadata.identifier, filename: file.name).absoluteString,
+                    videoURL: videoURL,
                     description: file.description ?? metadata.metadata.description ?? ""
                 )
                 
@@ -349,21 +410,6 @@ actor InternetArchiveAPI {
         
         print("InternetArchiveAPI: Found \(bestFormatVideos.count) videos in \(metadata.metadata.identifier)")
         return bestFormatVideos
-    }
-    
-    private func validateVideoURL(_ urlString: String) async -> Bool {
-        guard let url = URL(string: urlString) else { return false }
-        
-        do {
-            let (_, response) = try await URLSession.shared.data(from: url)
-            if let httpResponse = response as? HTTPURLResponse {
-                return (200...299).contains(httpResponse.statusCode)
-            }
-            return false
-        } catch {
-            print("Error validating URL \(urlString): \(error.localizedDescription)")
-            return false
-        }
     }
     
     func clearCache() {
