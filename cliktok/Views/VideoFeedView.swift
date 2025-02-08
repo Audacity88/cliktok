@@ -23,7 +23,7 @@ struct VideoFeedView: View {
                             VideoPlayerView(video: video, 
                                           showBackButton: false, 
                                           isVisible: .constant(index == currentIndex)) { _ in
-                                prefetchVideos(currentIndex: index)
+                                prefetchVideo(at: index)
                             }
                             .environmentObject(viewModel)
                             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -50,6 +50,8 @@ struct VideoFeedView: View {
                         await viewModel.loadMoreVideos()
                     }
                 }
+                prefetchVideo(at: newValue)
+                cancelPrefetch(at: oldValue)
             }
             .onChange(of: scrollToTop) { oldValue, newValue in
                 if newValue {
@@ -81,37 +83,21 @@ struct VideoFeedView: View {
         }
     }
     
-    private func prefetchVideos(currentIndex: Int) {
-        // Prefetch next 2 videos
-        let nextIndices = (1...2).compactMap { offset -> Int? in
-            let index = currentIndex + offset
-            return index < viewModel.videos.count ? index : nil
-        }
-        
-        let videosToPreload = nextIndices.map { viewModel.videos[$0] }
-        
-        // Cancel any prefetch tasks for videos we've moved past
-        let previousIndices = (-2...0).compactMap { offset -> Int? in
-            let index = currentIndex + offset
-            return index >= 0 ? index : nil
-        }
-        
-        // Cancel prefetch for videos we've moved past
-        previousIndices.forEach { index in
-            if let videoURL = URL(string: viewModel.videos[index].videoURL) {
-                Task {
-                    await VideoAssetLoader.shared.cancelPrefetch(for: videoURL)
-                }
+    private func prefetchVideo(at index: Int) {
+        guard index < viewModel.videos.count else { return }
+        let video = viewModel.videos[index]
+        if let url = URL(string: video.videoURL) {
+            Task {
+                await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .high)
             }
         }
-        
-        // Start prefetching upcoming videos
-        videosToPreload.forEach { video in
-            if let url = URL(string: video.videoURL) {
-                Task {
-                    await VideoAssetLoader.shared.prefetchAsset(for: url)
-                }
-            }
+    }
+    
+    private func cancelPrefetch(at index: Int) {
+        guard index < viewModel.videos.count else { return }
+        let video = viewModel.videos[index]
+        if let url = URL(string: video.videoURL) {
+            VideoAssetLoader.shared.cleanupAsset(for: url)
         }
     }
 }

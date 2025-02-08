@@ -28,15 +28,27 @@ struct ContentView: View {
         // Selected state - white
         appearance.stackedLayoutAppearance.selected.iconColor = .white
         appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
+        appearance.inlineLayoutAppearance.selected.iconColor = .white
+        appearance.inlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
+        appearance.compactInlineLayoutAppearance.selected.iconColor = .white
+        appearance.compactInlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
         
         // Unselected state - gray
         appearance.stackedLayoutAppearance.normal.iconColor = .gray
         appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        appearance.inlineLayoutAppearance.normal.iconColor = .gray
+        appearance.inlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        appearance.compactInlineLayoutAppearance.normal.iconColor = .gray
+        appearance.compactInlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
         
         // Apply the appearance
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
         UITabBar.appearance().unselectedItemTintColor = .gray
+        
+        // Enable more items
+        UITabBar.appearance().itemPositioning = .centered
+        UITabBar.appearance().itemSpacing = 32
     }
     
     func switchToTab(_ tab: Int) {
@@ -62,6 +74,14 @@ struct ContentView: View {
                     }
                     .tag(0)
                     
+                    ArchiveTabView()
+                        .environmentObject(feedViewModel)
+                    .tabItem {
+                        Image(systemName: "film.stack")
+                        Text("Archive")
+                    }
+                    .tag(1)
+                    
                     NavigationStack {
                         HashtagSearchView()
                             .environmentObject(feedViewModel)
@@ -70,7 +90,7 @@ struct ContentView: View {
                         Image(systemName: "magnifyingglass")
                         Text("Search")
                     }
-                    .tag(1)
+                    .tag(2)
                     
                     NavigationStack {
                         WalletView()
@@ -79,7 +99,7 @@ struct ContentView: View {
                         Image(systemName: "dollarsign.circle.fill")
                         Text("Wallet")
                     }
-                    .tag(2)
+                    .tag(3)
                     
                     NavigationStack {
                         VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
@@ -92,7 +112,7 @@ struct ContentView: View {
                         Image(systemName: "plus.square.fill")
                         Text("Upload")
                     }
-                    .tag(3)
+                    .tag(4)
                     
                     NavigationStack {
                         ProfileView()
@@ -102,7 +122,7 @@ struct ContentView: View {
                         Image(systemName: "person.fill")
                         Text("Profile")
                     }
-                    .tag(4)
+                    .tag(5)
                 }
             } else {
                 LoginView()

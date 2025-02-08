@@ -6,131 +6,193 @@ import FirebaseAuth
 
 #if os(iOS)
 
-// Video Asset Loader to handle caching
+// Video Asset Loader to handle caching and streaming
 actor VideoAssetLoader {
     static let shared = VideoAssetLoader()
+    
+    enum PrefetchPriority {
+        case high
+        case medium
+        case low
+    }
     
     private let cache: URLCache
     private var assetCache = NSCache<NSURL, AVAsset>()
     private var loadingAssets: [URL: Task<AVAsset, Error>] = [:]
     private var prefetchTasks: [URL: Task<Void, Never>] = [:]
+    private var preloadedData: [URL: Data] = [:]
     
     private init() {
-        // Create a 512MB cache
+        print("VideoAssetLoader: Initializing with 512MB cache")
         let cacheSizeInBytes = 512 * 1024 * 1024
         self.cache = URLCache(memoryCapacity: cacheSizeInBytes / 4,
                             diskCapacity: cacheSizeInBytes,
                             diskPath: "video_cache")
         
         // Configure asset cache
-        assetCache.countLimit = 10 // Maximum number of assets to keep in memory
-        assetCache.totalCostLimit = 256 * 1024 * 1024 // 256MB limit for asset cache
+        assetCache.countLimit = 10
+        assetCache.totalCostLimit = 256 * 1024 * 1024
     }
     
-    func prefetchAsset(for url: URL) {
-        // Don't prefetch if already loading, prefetching, or in cache
-        guard loadingAssets[url] == nil, 
+    func loadAsset(for url: URL) async throws -> AVAsset {
+        let startTime = Date()
+        print("VideoAssetLoader: Starting to load asset for URL: \(url)")
+        
+        // Return cached asset if available
+        if let cachedAsset = assetCache.object(forKey: url as NSURL) {
+            print("VideoAssetLoader: Found cached asset, returning immediately")
+            return cachedAsset
+        }
+        
+        // Check if there's already a loading task
+        if let existingTask = loadingAssets[url] {
+            print("VideoAssetLoader: Using existing loading task for URL")
+            return try await existingTask.value
+        }
+        
+        print("VideoAssetLoader: Creating new loading task")
+        let task = Task<AVAsset, Error> {
+            // If we have preloaded data, create an asset from it
+            if let preloadedData = preloadedData[url] {
+                print("VideoAssetLoader: Using preloaded data")
+                let asset = try await createAssetFromData(preloadedData, for: url)
+                assetCache.setObject(asset, forKey: url as NSURL)
+                return asset
+            }
+            
+            // Create asset with streaming optimizations
+            let assetOptions: [String: Any] = [
+                AVURLAssetAllowsExpensiveNetworkAccessKey: true,
+                AVURLAssetPreferPreciseDurationAndTimingKey: false
+            ]
+            
+            print("VideoAssetLoader: Creating streaming asset")
+            let asset = AVURLAsset(url: url, options: assetOptions)
+            
+            // Load enough data to establish playback
+            print("VideoAssetLoader: Loading initial metadata")
+            try await loadInitialMetadata(for: asset)
+            
+            assetCache.setObject(asset, forKey: url as NSURL)
+            print("VideoAssetLoader: Asset prepared in \(Date().timeIntervalSince(startTime))s")
+            return asset
+        }
+        
+        loadingAssets[url] = task
+        
+        do {
+            let asset = try await task.value
+            loadingAssets[url] = nil
+            return asset
+        } catch {
+            loadingAssets[url] = nil
+            print("VideoAssetLoader: Error loading asset: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    private func loadInitialMetadata(for asset: AVURLAsset) async throws {
+        print("VideoAssetLoader: Loading essential metadata")
+        // Load essential properties to ensure valid playback
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                // Load tracks first
+                let tracks = try await asset.load(.tracks)
+                guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+                    throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No video track found"])
+                }
+                
+                // Load essential video track properties
+                let descriptions = try await videoTrack.load(.formatDescriptions)
+                guard !descriptions.isEmpty else {
+                    throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No format descriptions found"])
+                }
+            }
+            
+            // Wait for metadata loading to complete
+            try await group.waitForAll()
+        }
+        print("VideoAssetLoader: Metadata loaded successfully")
+    }
+    
+    private func createAssetFromData(_ data: Data, for url: URL) async throws -> AVAsset {
+        let fileManager = FileManager.default
+        let cacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let fileURL = cacheDir.appendingPathComponent(url.lastPathComponent)
+        
+        // Write data to temporary file
+        try data.write(to: fileURL)
+        
+        // Create asset from file
+        let asset = AVURLAsset(url: fileURL)
+        
+        // Load essential metadata
+        try await loadInitialMetadata(for: asset)
+        
+        // Schedule cleanup
+        Task {
+            try? await Task.sleep(nanoseconds: 30 * NSEC_PER_SEC)
+            try? fileManager.removeItem(at: fileURL)
+        }
+        
+        return asset
+    }
+    
+    func prefetchWithPriority(for url: URL, priority: PrefetchPriority) async {
+        print("VideoAssetLoader: Starting priority prefetch for URL: \(url)")
+        
+        // Skip if already cached or loading
+        guard loadingAssets[url] == nil,
               prefetchTasks[url] == nil,
-              assetCache.object(forKey: url as NSURL) == nil else { return }
+              assetCache.object(forKey: url as NSURL) == nil else {
+            return
+        }
+        
+        // For high priority, load more initial data
+        let rangeSize = priority == .high ? 2 * 1024 * 1024 : 1024 * 1024 // 2MB for high priority
         
         let task = Task {
             do {
-                let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 60)
+                let session = URLSession.shared
+                var request = URLRequest(url: url)
+                request.setValue("bytes=0-\(rangeSize)", forHTTPHeaderField: "Range")
                 
-                // If not in cache, download it
-                if cache.cachedResponse(for: request) == nil {
-                    let (data, response) = try await URLSession.shared.data(for: request)
-                    cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: request)
+                print("VideoAssetLoader: Downloading initial \(rangeSize/1024)KB")
+                let (data, response) = try await session.data(for: request)
+                
+                // If we got a 206 Partial Content response, store the data
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 206 {
+                    preloadedData[url] = data
+                    print("VideoAssetLoader: Successfully prefetched \(data.count) bytes")
+                } else {
+                    print("VideoAssetLoader: Server doesn't support range requests, falling back")
+                    // Create and cache the full asset
+                    _ = try await loadAsset(for: url)
                 }
             } catch {
-                print("Prefetch failed for \(url): \(error.localizedDescription)")
+                print("VideoAssetLoader: Prefetch failed for \(url): \(error.localizedDescription)")
             }
         }
         
         prefetchTasks[url] = task
     }
     
-    func cancelPrefetch(for url: URL) {
+    func cleanupAsset(for url: URL) {
+        print("VideoAssetLoader: Cleaning up asset for URL: \(url)")
+        assetCache.removeObject(forKey: url as NSURL)
+        preloadedData.removeValue(forKey: url)
+        loadingAssets[url]?.cancel()
+        loadingAssets[url] = nil
         prefetchTasks[url]?.cancel()
         prefetchTasks[url] = nil
     }
     
-    func loadAsset(for url: URL) async throws -> AVAsset {
-        // Check memory cache first
-        if let cachedAsset = assetCache.object(forKey: url as NSURL) {
-            print("Using cached asset for: \(url)")
-            return cachedAsset
-        }
-        
-        // Check if we're already loading this asset
-        if let existingTask = loadingAssets[url] {
-            print("Using existing loading task for: \(url)")
-            return try await existingTask.value
-        }
-        
-        // Create a new loading task
-        let task = Task {
-            let asset: AVAsset
-            
-            // Create URL request
-            let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 60)
-            
-            // Check URL cache
-            if let cachedResponse = cache.cachedResponse(for: request) {
-                print("Loading asset from URL cache: \(url)")
-                let localURL = try await saveToDisk(data: cachedResponse.data)
-                asset = AVAsset(url: localURL)
-            } else {
-                print("Downloading asset: \(url)")
-                // Download and cache
-                let (data, response) = try await URLSession.shared.data(for: request)
-                cache.storeCachedResponse(CachedURLResponse(response: response, data: data), for: request)
-                let localURL = try await saveToDisk(data: data)
-                asset = AVAsset(url: localURL)
-            }
-            
-            // Load essential properties
-            try await asset.load(.isPlayable, .duration, .tracks)
-            
-            // Store in memory cache
-            assetCache.setObject(asset, forKey: url as NSURL)
-            
-            return asset
-        }
-        
-        loadingAssets[url] = task
-        
-        // Clean up after loading
-        defer {
-            Task { await cleanupLoadingTask(for: url) }
-        }
-        
-        return try await task.value
-    }
-    
-    private func cleanupLoadingTask(for url: URL) {
-        loadingAssets[url] = nil
-    }
-    
-    private func saveToDisk(data: Data) async throws -> URL {
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = UUID().uuidString + ".mp4"
-        let fileURL = tempDir.appendingPathComponent(fileName)
-        
-        try data.write(to: fileURL)
-        return fileURL
-    }
-    
     func clearCache() {
+        print("VideoAssetLoader: Clearing all caches")
         assetCache.removeAllObjects()
+        preloadedData.removeAll()
         cache.removeAllCachedResponses()
-        
-        // Cancel all loading and prefetch tasks
-        loadingAssets.values.forEach { $0.cancel() }
-        loadingAssets.removeAll()
-        
-        prefetchTasks.values.forEach { $0.cancel() }
-        prefetchTasks.removeAll()
     }
 }
 
@@ -539,92 +601,63 @@ struct VideoPlayerView: View {
     
     private func loadAndPlayVideo() async {
         guard let url = URL(string: video.videoURL) else {
-            print("Invalid URL for video: \(video.id)")
+            print("VideoPlayerView: Invalid URL for video: \(video.id)")
             return
         }
         
-        print("Loading video from URL: \(url)")
+        print("VideoPlayerView: Starting to load video from URL: \(url)")
+        let startTime = Date()
         
         await MainActor.run {
             isLoadingVideo = true
         }
         
         do {
+            print("VideoPlayerView: Requesting asset from loader")
             // Load asset using the caching loader
             let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
             
-            // Verify the asset is playable
-            guard try await asset.isPlayable else {
-                throw NSError(domain: "VideoPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "Video is not playable"])
-            }
-            
+            print("VideoPlayerView: Creating player item")
             // Create AVPlayerItem with the loaded asset
             let playerItem = AVPlayerItem(asset: asset)
             
+            // Configure for streaming
+            playerItem.preferredForwardBufferDuration = 2
+            playerItem.automaticallyPreservesTimeOffsetFromLive = false
+            
             await MainActor.run {
+                print("VideoPlayerView: Setting up player on main thread")
                 // Clean up existing player and observers
                 cleanupPlayer()
                 
-                // Create new player
+                // Create new player with optimized settings
                 let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.automaticallyWaitsToMinimizeStalling = false // Start playback immediately
                 newPlayer.isMuted = isMuted
                 newPlayer.volume = 1.0
                 
-                // Add periodic time observer for better state management
-                let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-                timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
-                    isPlaying = newPlayer.timeControlStatus == .playing
-                }
+                // Set up periodic time observer
+                setupTimeObserver(for: newPlayer)
                 
-                // Configure looping with a single observer
-                let loopObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemDidPlayToEndTime,
-                    object: playerItem,
-                    queue: .main
-                ) { [weak newPlayer] _ in
-                    newPlayer?.seek(to: .zero)
-                    newPlayer?.play()
-                }
+                // Set up player item observers
+                setupPlayerItemObservers(for: playerItem)
                 
-                // Store the observer for cleanup
-                self.loopObserver = loopObserver
-                
-                // Set up error observation with a single observer
-                let errorObserver = NotificationCenter.default.addObserver(
-                    forName: .AVPlayerItemFailedToPlayToEndTime,
-                    object: playerItem,
-                    queue: .main
-                ) { notification in
-                    if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                        print("Error playing video: \(error.localizedDescription)")
-                        errorMessage = error.localizedDescription
-                        showError = true
-                    }
-                }
-                
-                // Store the error observer for cleanup
-                self.errorObserver = errorObserver
-                
-                // Set the player and play
+                // Assign the new player
                 self.player = newPlayer
                 
-                // Only start playing if the view is visible
-                if isVisible {
-                    player?.play()
-                    print("Started playing video: \(video.id)")
-                } else {
-                    player?.pause()
-                    print("Video loaded but paused (not visible): \(video.id)")
-                }
+                print("VideoPlayerView: Starting playback")
+                // Start playback
+                newPlayer.play()
                 
+                print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
                 isLoadingVideo = false
             }
         } catch {
+            print("VideoPlayerView: Error loading video: \(error.localizedDescription)")
             await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.showError = true
                 isLoadingVideo = false
-                errorMessage = error.localizedDescription
-                showError = true
-                print("Error loading video: \(error.localizedDescription)")
             }
         }
     }
@@ -683,6 +716,45 @@ struct VideoPlayerView: View {
             }
         }
     }
+    
+    private func setupTimeObserver(for player: AVPlayer) {
+        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] _ in
+            self.isPlaying = player?.timeControlStatus == .playing
+        }
+    }
+    
+    private func setupPlayerItemObservers(for playerItem: AVPlayerItem) {
+        // Configure looping with a single observer
+        let loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { [weak player] _ in
+            player?.seek(to: .zero)
+            player?.play()
+        }
+        
+        // Store the observer for cleanup
+        self.loopObserver = loopObserver
+        
+        // Set up error observation with a single observer
+        let errorObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { notification in
+            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+                print("Error playing video: \(error.localizedDescription)")
+                errorMessage = error.localizedDescription
+                showError = true
+            }
+        }
+        
+        // Store the error observer for cleanup
+        self.errorObserver = errorObserver
+    }
 }
 
 #endif
+  
