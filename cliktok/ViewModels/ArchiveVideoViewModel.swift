@@ -7,6 +7,7 @@ class ArchiveVideoViewModel: ObservableObject {
     @Published var selectedCollection: ArchiveCollection?
     @Published var isLoading = false
     @Published var error: String?
+    @Published var hasMoreVideos = true
     
     private let api = InternetArchiveAPI.shared
     private var loadedRanges: [String: Set<Range<Int>>] = [:]
@@ -68,15 +69,14 @@ class ArchiveVideoViewModel: ObservableObject {
         
         isLoading = true
         error = nil
+        hasMoreVideos = true  // Reset this flag when loading a new collection
         
-        // Initialize empty collection if needed
+        // Clear any existing videos for this collection
         if let index = collections.firstIndex(where: { $0.id == collection.id }) {
             var updatedCollection = collection
-            if updatedCollection.videos.isEmpty {
-                updatedCollection.videos = []
-                collections[index] = updatedCollection
-                selectedCollection = updatedCollection
-            }
+            updatedCollection.videos = []
+            collections[index] = updatedCollection
+            selectedCollection = updatedCollection
         }
         
         // Load initial page
@@ -88,8 +88,16 @@ class ArchiveVideoViewModel: ObservableObject {
     func loadMoreVideosIfNeeded(for collection: ArchiveCollection, currentIndex: Int) async {
         guard !isLoadingMore,
               collection.id != "test_videos",
+              hasMoreVideos,  // Check if we have more videos to load
               currentIndex >= collection.videos.count - 2 // Load more when approaching end
-        else { return }
+        else {
+            print("ArchiveVideoViewModel: Skipping load - isLoadingMore: \(!isLoadingMore), isTestVideos: \(collection.id == "test_videos"), hasMoreVideos: \(hasMoreVideos), currentIndex: \(currentIndex), total videos: \(collection.videos.count)")
+            return
+        }
+        
+        print("ArchiveVideoViewModel: Loading more videos starting at index \(collection.videos.count)")
+        isLoading = true
+        defer { isLoading = false }
         
         await loadMoreVideos(for: collection, startIndex: collection.videos.count)
     }
@@ -102,48 +110,46 @@ class ArchiveVideoViewModel: ObservableObject {
         // Check if range is already loaded
         let range = startIndex..<(startIndex + pageSize)
         if loadedRanges[collection.id]?.contains(where: { $0.overlaps(range) }) ?? false {
+            print("ArchiveVideoViewModel: Range \(range) already loaded")
             return
         }
         
         do {
+            print("ArchiveVideoViewModel: Fetching videos from \(startIndex) to \(startIndex + pageSize)")
             let videos = try await api.fetchCollectionItems(
                 identifier: collection.id,
                 offset: startIndex,
                 limit: pageSize
             )
             
-            if !videos.isEmpty {
-                if let index = collections.firstIndex(where: { $0.id == collection.id }) {
-                    var updatedCollection = collections[index]
-                    
-                    // Append new videos
-                    if startIndex >= updatedCollection.videos.count {
-                        updatedCollection.videos.append(contentsOf: videos)
-                    } else {
-                        // Insert videos at correct position
-                        for (i, video) in videos.enumerated() {
-                            let insertIndex = startIndex + i
-                            if insertIndex < updatedCollection.videos.count {
-                                updatedCollection.videos[insertIndex] = video
-                            } else {
-                                updatedCollection.videos.append(video)
-                            }
-                        }
-                    }
-                    
-                    collections[index] = updatedCollection
-                    if selectedCollection?.id == collection.id {
-                        selectedCollection = updatedCollection
-                    }
-                    
-                    // Mark range as loaded
-                    var ranges = loadedRanges[collection.id] ?? Set<Range<Int>>()
-                    ranges.insert(range)
-                    loadedRanges[collection.id] = ranges
+            if videos.isEmpty {
+                print("ArchiveVideoViewModel: No more videos available")
+                hasMoreVideos = false
+                return
+            }
+            
+            if let index = collections.firstIndex(where: { $0.id == collection.id }) {
+                var updatedCollection = collections[index]
+                
+                // Always append new videos at the end
+                updatedCollection.videos.append(contentsOf: videos)
+                
+                collections[index] = updatedCollection
+                if selectedCollection?.id == collection.id {
+                    selectedCollection = updatedCollection
                 }
+                
+                // Mark range as loaded
+                var ranges = loadedRanges[collection.id] ?? Set<Range<Int>>()
+                ranges.insert(range)
+                loadedRanges[collection.id] = ranges
+                
+                print("ArchiveVideoViewModel: Added \(videos.count) more videos. Total count: \(updatedCollection.videos.count)")
             }
         } catch {
             self.error = error.localizedDescription
+            hasMoreVideos = false  // Set this to false on error to prevent endless retries
+            print("ArchiveVideoViewModel: Error loading more videos: \(error.localizedDescription)")
         }
     }
 }

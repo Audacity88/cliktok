@@ -57,13 +57,11 @@ struct ArchiveTabView: View {
                                     guard index == currentIndex else { return }
                                     print("ArchiveTabView: Video \(index) appeared")
                                     
-                                    // Update visible range when current index changes
-                                    let newStart = max(0, index - 1)
-                                    let newEnd = min(selectedCollection.videos.count, index + 2)
-                                    visibleRange = newStart..<newEnd
-                                    
-                                    // Load more videos if needed
-                                    await viewModel.loadMoreVideosIfNeeded(for: selectedCollection, currentIndex: index)
+                                    // Load more videos when we're 2 videos away from the end
+                                    if index >= selectedCollection.videos.count - 2 {
+                                        print("ArchiveTabView: Approaching end, loading more videos...")
+                                        await viewModel.loadMoreVideosIfNeeded(for: selectedCollection, currentIndex: index)
+                                    }
                                     
                                     if let collection = viewModel.selectedCollection {
                                         await prefetchUpcomingVideos(currentIndex: index, in: collection)
@@ -76,9 +74,11 @@ struct ArchiveTabView: View {
                                     }
                                 }
                                 .overlay(alignment: .bottom) {
-                                    if viewModel.isLoading && index == selectedCollection.videos.count - 1 {
+                                    if viewModel.isLoading && index >= selectedCollection.videos.count - 2 {
                                         ProgressView()
                                             .padding()
+                                            .background(Color.black.opacity(0.5))
+                                            .cornerRadius(8)
                                     }
                                 }
                             }
@@ -109,13 +109,11 @@ struct ArchiveTabView: View {
                     print("ArchiveTabView: Switched from video \(oldValue) to \(newValue)")
                     if let collection = viewModel.selectedCollection {
                         Task {
-                            // Update visible range when current index changes
-                            let newStart = max(0, newValue - 1)
-                            let newEnd = min(collection.videos.count, newValue + 2)
-                            visibleRange = newStart..<newEnd
-                            
-                            // Load more videos if needed
-                            await viewModel.loadMoreVideosIfNeeded(for: collection, currentIndex: newValue)
+                            // Load more videos when we're 2 videos away from the end
+                            if newValue >= collection.videos.count - 2 {
+                                print("ArchiveTabView: Approaching end, loading more videos...")
+                                await viewModel.loadMoreVideosIfNeeded(for: collection, currentIndex: newValue)
+                            }
                             
                             await prefetchUpcomingVideos(currentIndex: newValue, in: collection)
                             cleanupDistantVideos(currentIndex: newValue, in: collection)
@@ -162,36 +160,44 @@ struct ArchiveTabView: View {
         isPrefetching = true
         defer { isPrefetching = false }
         
-        // Prefetch only one video ahead to reduce load
+        // Only prefetch the next video to reduce errors and memory pressure
         let nextIndex = currentIndex + 1
-        guard nextIndex < collection.videos.count,
-              visibleRange.contains(nextIndex) else { return }
+        guard nextIndex < collection.videos.count else {
+            print("ArchiveTabView: No more videos to prefetch")
+            return
+        }
         
         let videoURL = collection.videos[nextIndex].videoURL
         if let url = URL(string: getOptimizedVideoURL(videoURL)) {
-            print("ArchiveTabView: Prefetching video at index \(nextIndex)")
+            print("ArchiveTabView: Prefetching next video at index \(nextIndex)")
             
-            // Start prefetching with high priority
-            Task {
+            do {
+                // Wait for current video to start playing
+                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
                 await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .high)
+            } catch {
+                print("ArchiveTabView: Prefetch cancelled for index \(nextIndex)")
             }
         }
     }
     
     private func cleanupDistantVideos(currentIndex: Int, in collection: ArchiveCollection) {
-        // Calculate buffer bounds safely
-        let lowerBound = max(0, currentIndex - 1)
-        let upperBound = min(collection.videos.count - 1, currentIndex + 1)
+        // Calculate the upper bound safely
+        let upperBound = min(currentIndex + 1, collection.videos.count - 1)
         
         // Only proceed if we have valid bounds
-        guard lowerBound <= upperBound else { return }
-        let keepRange = lowerBound...upperBound
+        guard currentIndex <= upperBound else {
+            print("ArchiveTabView: Invalid range for cleanup, skipping")
+            return
+        }
+        
+        let keepRange = currentIndex...upperBound
         
         // Cleanup videos outside the keep range
         for (index, video) in collection.videos.enumerated() {
             if !keepRange.contains(index) {
                 if let url = URL(string: video.videoURL) {
-                    print("ArchiveTabView: Cleaning up distant video at index \(index)")
+                    print("ArchiveTabView: Cleaning up video at index \(index)")
                     VideoAssetLoader.shared.cleanupAsset(for: url)
                 }
             }
