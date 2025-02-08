@@ -81,11 +81,12 @@ struct ContentView: View {
                     }
                     .tag(2)
                     
-                    Button(action: {
-                        showingVideoUpload = true
-                    }) {
-                        Image(systemName: "plus.square.fill")
-                            .font(.system(size: 24))
+                    NavigationStack {
+                        VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
+                            switchToTab(0)  // Switch to home tab
+                            scrollToTop = true  // Trigger scroll to top
+                        })
+                        .environmentObject(feedViewModel)
                     }
                     .tabItem {
                         Image(systemName: "plus.square.fill")
@@ -102,13 +103,6 @@ struct ContentView: View {
                         Text("Profile")
                     }
                     .tag(4)
-                }
-                .sheet(isPresented: $showingVideoUpload) {
-                    VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
-                        switchToTab(0)  // Switch to home tab
-                        scrollToTop = true  // Trigger scroll to top
-                    })
-                    .environmentObject(feedViewModel)
                 }
             } else {
                 LoginView()

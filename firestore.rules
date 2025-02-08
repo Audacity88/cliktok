@@ -31,7 +31,16 @@ service cloud.firestore {
       allow create: if request.auth != null && 
                    request.resource.data.user_id == request.auth.uid;
       
-      // Allow updating/deleting if you own the video
+      // Allow updating views by anyone (including anonymous users)
+      allow update: if request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['views']);
+      
+      // Allow updating likes by authenticated users only
+      allow update: if request.auth != null && 
+                   request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['likes']);
+      
+      // Allow full updates/deletes if you own the video
       allow update, delete: if request.auth != null && 
                           resource.data.user_id == request.auth.uid;
     }

@@ -141,6 +141,7 @@ struct VideoPlayerView: View {
     let video: Video
     let showBackButton: Bool
     @Binding var clearSearchOnDismiss: Bool
+    @Binding var isVisible: Bool
     @State private var player: AVPlayer?
     @State private var isMuted = false
     @State private var showControls = true
@@ -155,24 +156,29 @@ struct VideoPlayerView: View {
     @State private var isLoadingVideo = false
     @State private var isPlaying = true
     @State private var showPlayButton = false
-    @State private var timeObserverToken: Any?
+    @State private var timeObserver: Any?
     @State private var showDeleteAlert = false
     @State private var showEditSheet = false
     @State private var creator: User?
+    @State private var loopObserver: NSObjectProtocol?
+    @State private var errorObserver: NSObjectProtocol?
     let onPrefetch: (([Video]) -> Void)?
     
-    init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), onPrefetch: (([Video]) -> Void)? = nil) {
+    init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, onPrefetch: (([Video]) -> Void)? = nil) {
         self.video = video
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
+        self._isVisible = isVisible
         self.onPrefetch = onPrefetch
         
-        // Configure audio session
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("Failed to set audio session category: \(error)")
+        // Configure audio session once at init
+        Task {
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("Failed to set audio session category: \(error)")
+            }
         }
     }
     
@@ -447,14 +453,29 @@ struct VideoPlayerView: View {
             .onAppear {
                 print("VideoPlayerView appeared for video: \(video.id)")
                 Task {
+                    // Load video without autoplaying
                     await loadAndPlayVideo()
-                    // Fetch creator once and store in state
+                    
+                    // Load creator profile and tip data
                     if creator == nil {
                         await feedViewModel.fetchCreators(for: [video])
                         creator = feedViewModel.getCreator(for: video)
                     }
                     await tipViewModel.loadBalance()
                     await tipViewModel.loadTipHistory()
+                }
+            }
+            .onChange(of: isVisible) { newValue in
+                if newValue {
+                    // Update view count and play when becoming visible
+                    Task {
+                        print("Video becoming visible: \(video.id)")
+                        await feedViewModel.updateVideoStats(video: video)
+                        player?.play()
+                    }
+                } else {
+                    print("Video becoming hidden: \(video.id)")
+                    player?.pause()
                 }
             }
             .onDisappear {
@@ -469,6 +490,11 @@ struct VideoPlayerView: View {
                     // Resume playing from current position when edit sheet is dismissed
                     player?.play()
                     isPlaying = true
+                    
+                    // Refresh the video data
+                    Task {
+                        await feedViewModel.loadInitialVideos()
+                    }
                 }
             }
             .sheet(isPresented: $showEditSheet) {
@@ -536,22 +562,22 @@ struct VideoPlayerView: View {
             let playerItem = AVPlayerItem(asset: asset)
             
             await MainActor.run {
+                // Clean up existing player and observers
+                cleanupPlayer()
+                
                 // Create new player
                 let newPlayer = AVPlayer(playerItem: playerItem)
                 newPlayer.isMuted = isMuted
-                
-                // Set audio volume to maximum
                 newPlayer.volume = 1.0
                 
                 // Add periodic time observer for better state management
                 let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-                timeObserverToken = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
+                timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { _ in
                     isPlaying = newPlayer.timeControlStatus == .playing
                 }
                 
-                // Configure looping
-                NotificationCenter.default.removeObserver(self)
-                NotificationCenter.default.addObserver(
+                // Configure looping with a single observer
+                let loopObserver = NotificationCenter.default.addObserver(
                     forName: .AVPlayerItemDidPlayToEndTime,
                     object: playerItem,
                     queue: .main
@@ -560,8 +586,11 @@ struct VideoPlayerView: View {
                     newPlayer?.play()
                 }
                 
-                // Set up error observation
-                NotificationCenter.default.addObserver(
+                // Store the observer for cleanup
+                self.loopObserver = loopObserver
+                
+                // Set up error observation with a single observer
+                let errorObserver = NotificationCenter.default.addObserver(
                     forName: .AVPlayerItemFailedToPlayToEndTime,
                     object: playerItem,
                     queue: .main
@@ -573,12 +602,22 @@ struct VideoPlayerView: View {
                     }
                 }
                 
+                // Store the error observer for cleanup
+                self.errorObserver = errorObserver
+                
                 // Set the player and play
                 self.player = newPlayer
-                newPlayer.play()
-                isPlaying = true
+                
+                // Only start playing if the view is visible
+                if isVisible {
+                    player?.play()
+                    print("Started playing video: \(video.id)")
+                } else {
+                    player?.pause()
+                    print("Video loaded but paused (not visible): \(video.id)")
+                }
+                
                 isLoadingVideo = false
-                print("Started playing video: \(video.id)")
             }
         } catch {
             await MainActor.run {
@@ -591,12 +630,27 @@ struct VideoPlayerView: View {
     }
     
     private func cleanupPlayer() {
-        NotificationCenter.default.removeObserver(self)
-        if let player = player, let token = timeObserverToken {
-            player.removeTimeObserver(token)
-            timeObserverToken = nil
+        print("Cleaning up player")
+        
+        // Remove observers if they exist
+        if let loopObserver = loopObserver {
+            NotificationCenter.default.removeObserver(loopObserver)
+            self.loopObserver = nil
         }
+        
+        if let errorObserver = errorObserver {
+            NotificationCenter.default.removeObserver(errorObserver)
+            self.errorObserver = nil
+        }
+        
+        if let player = player, let timeObserver = timeObserver {
+            player.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+        
+        // Pause and nil the player
         player?.pause()
+        player?.replaceCurrentItem(with: nil)
         player = nil
         isPlaying = false
     }

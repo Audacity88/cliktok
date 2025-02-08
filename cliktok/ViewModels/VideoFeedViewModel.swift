@@ -138,6 +138,13 @@ class VideoFeedViewModel: ObservableObject {
             
             if viewed {
                 updates["views"] = FieldValue.increment(Int64(1))
+                // Update local video object
+                if let index = videos.firstIndex(where: { $0.id == id }) {
+                    videos[index].views += 1
+                }
+                if let index = searchResults.firstIndex(where: { $0.id == id }) {
+                    searchResults[index].views += 1
+                }
             }
             
             if let liked = liked {
@@ -145,7 +152,9 @@ class VideoFeedViewModel: ObservableObject {
             }
             
             if !updates.isEmpty {
+                print("Updating video stats for \(id) with updates: \(updates)")
                 try await db.collection("videos").document(id).updateData(updates)
+                print("Successfully updated video stats")
             }
         } catch {
             print("Error updating video stats: \(error.localizedDescription)")

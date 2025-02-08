@@ -61,21 +61,12 @@ class PaymentManager: NSObject, ObservableObject {
         }
     }
     
-    private var currentBalance: Decimal = 0.0
-    
     private override init() {
         // Load development mode state
         self.isDevelopmentMode = defaults.bool(forKey: isDevelopmentModeKey)
         self.isTestMode = false
         
-        // Initialize balance to 0
-        self.currentBalance = 0
-        
         super.init()
-        
-        // Load saved balance
-        let savedBalance = defaults.double(forKey: "userBalance")
-        self.currentBalance = Decimal(savedBalance)
         
         // Always configure server connection first
         configureServerConnection()
@@ -434,48 +425,25 @@ class PaymentManager: NSObject, ObservableObject {
             return
         }
         
-        addBalance(amount: amount)
-        print("Added \(amount) test money. New balance: \(currentBalance)")
-    }
-    
-    func addBalance(amount: Decimal) {
-        currentBalance += amount
-        UserDefaults.standard.set(NSDecimalNumber(decimal: currentBalance).doubleValue, forKey: "userBalance")
-    }
-    
-    func useBalance(amount: Decimal) -> Bool {
-        guard amount <= currentBalance else {
-            return false
-        }
-        currentBalance -= amount
-        UserDefaults.standard.set(NSDecimalNumber(decimal: currentBalance).doubleValue, forKey: "userBalance")
-        return true
-    }
-    
-    func getCurrentBalance() -> Decimal {
-        return currentBalance
-    }
-    
-    func loadBalance() {
-        let savedBalance = UserDefaults.standard.double(forKey: "userBalance")
-        currentBalance = Decimal(savedBalance)
-    }
-    
-    func toggleDevelopmentMode() {
-        isDevelopmentMode.toggle()
-        print("Switched to \(isDevelopmentMode ? "development" : "production") mode")
+        let currentBalance = getDevelopmentBalance()
+        let newBalance = currentBalance + NSDecimalNumber(decimal: amount).doubleValue
+        setDevelopmentBalance(newBalance)
+        print("Added \(amount) test money. New balance: \(newBalance)")
     }
     
     func clearPaymentData() {
         // Clear all payment-related UserDefaults
         defaults.removeObject(forKey: isDevelopmentModeKey)
         defaults.removeObject(forKey: "didSetInitialDevelopmentMode")
-        defaults.removeObject(forKey: "userBalance")
+        
+        // Clear user-specific balance if available
+        if let balanceKey = getUserBalanceKey() {
+            defaults.removeObject(forKey: balanceKey)
+        }
         
         // Reset local state
         isDevelopmentMode = false
         isTestMode = false
-        currentBalance = 0
         
         print("Cleared all payment data from UserDefaults")
         
@@ -492,6 +460,24 @@ class PaymentManager: NSObject, ObservableObject {
         formatter.numberStyle = .currency
         formatter.currencyCode = "USD"
         return formatter.string(from: NSDecimalNumber(decimal: amount)) ?? "$\(amount)"
+    }
+    
+    // Helper method to get user-specific balance key
+    private func getUserBalanceKey() -> String? {
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return nil }
+        return "userBalance_\(userId)"
+    }
+    
+    // Helper method to get development mode balance
+    private func getDevelopmentBalance() -> Double {
+        guard let balanceKey = getUserBalanceKey() else { return 0.0 }
+        return defaults.double(forKey: balanceKey)
+    }
+    
+    // Helper method to set development mode balance
+    private func setDevelopmentBalance(_ amount: Double) {
+        guard let balanceKey = getUserBalanceKey() else { return }
+        defaults.set(amount, forKey: balanceKey)
     }
 }
 

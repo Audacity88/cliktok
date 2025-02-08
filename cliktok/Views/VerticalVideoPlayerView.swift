@@ -38,7 +38,10 @@ struct VerticalVideoPlayerView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video, showBackButton: showBackButton, clearSearchOnDismiss: $clearSearchOnDismiss)
+                            VideoPlayerView(video: video, 
+                                          showBackButton: showBackButton, 
+                                          clearSearchOnDismiss: $clearSearchOnDismiss,
+                                          isVisible: .constant(index == currentIndex))
                                 .environmentObject(feedViewModel)
                                 .frame(width: width, height: height)
                                 .rotationEffect(.degrees(-90))

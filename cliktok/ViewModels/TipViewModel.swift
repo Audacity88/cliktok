@@ -41,6 +41,24 @@ class TipViewModel: ObservableObject {
         await loadTipHistoryWithoutBalance()
     }
     
+    // Helper method to get user-specific balance key
+    private func getUserBalanceKey() -> String? {
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else { return nil }
+        return "userBalance_\(userId)"
+    }
+    
+    // Helper method to get development mode balance
+    private func getDevelopmentBalance() -> Double {
+        guard let balanceKey = getUserBalanceKey() else { return 0.0 }
+        return UserDefaults.standard.double(forKey: balanceKey)
+    }
+    
+    // Helper method to set development mode balance
+    private func setDevelopmentBalance(_ amount: Double) {
+        guard let balanceKey = getUserBalanceKey() else { return }
+        UserDefaults.standard.set(amount, forKey: balanceKey)
+    }
+    
     // MARK: - Public Methods
     
     private func logBalanceChange(oldBalance: Double, newBalance: Double, reason: String, details: [String: Any] = [:]) {
@@ -87,7 +105,7 @@ class TipViewModel: ObservableObject {
             print("Adding funds in development mode: \(amount)")
             let decimalAmount = NSDecimalNumber(value: amount).decimalValue
             paymentManager.addTestMoney(amount: decimalAmount)
-            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            balance = getDevelopmentBalance()
             logBalanceChange(oldBalance: oldBalance, 
                            newBalance: balance, 
                            reason: "Added Test Funds",
@@ -251,8 +269,7 @@ class TipViewModel: ObservableObject {
         let oldBalance = balance
         
         if paymentManager.isDevelopmentMode {
-            let currentBalance = paymentManager.getCurrentBalance()
-            let newBalance = NSDecimalNumber(decimal: currentBalance).doubleValue
+            let newBalance = getDevelopmentBalance()
             // Only update and log if there's an actual change
             if abs(newBalance - oldBalance) > 0.001 {
                 balance = newBalance
@@ -340,19 +357,23 @@ class TipViewModel: ObservableObject {
         let isSelfTip = senderID == receiverID
         
         if paymentManager.isDevelopmentMode {
-            let decimalAmount = NSDecimalNumber(value: amount).decimalValue
-            if !paymentManager.useBalance(amount: decimalAmount) {
+            let currentBalance = getDevelopmentBalance()
+            guard currentBalance >= amount else {
                 throw PaymentError.insufficientFunds
             }
             
-            // Always update balance, even for self-tips
-            balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            // Update sender's balance
+            setDevelopmentBalance(currentBalance - amount)
             
-            // For self-tips, immediately add the amount back
-            if isSelfTip {
-                paymentManager.addTestMoney(amount: decimalAmount)
-                balance = NSDecimalNumber(decimal: paymentManager.getCurrentBalance()).doubleValue
+            // Update receiver's balance if it's not a self-tip
+            if !isSelfTip {
+                let receiverBalanceKey = "userBalance_\(receiverID)"
+                let receiverCurrentBalance = UserDefaults.standard.double(forKey: receiverBalanceKey)
+                UserDefaults.standard.set(receiverCurrentBalance + amount, forKey: receiverBalanceKey)
             }
+            
+            // Update local balance state
+            balance = getDevelopmentBalance()
             
             // Create tip record
             let tipRef = db.collection("tips").document()

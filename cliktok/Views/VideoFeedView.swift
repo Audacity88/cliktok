@@ -20,7 +20,9 @@ struct VideoFeedView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video, showBackButton: false) { _ in
+                            VideoPlayerView(video: video, 
+                                          showBackButton: false, 
+                                          isVisible: .constant(index == currentIndex)) { _ in
                                 prefetchVideos(currentIndex: index)
                             }
                             .environmentObject(viewModel)

@@ -86,16 +86,22 @@ struct VideoEditView: View {
     private func saveChanges() async {
         isLoading = true
         
+        // Process hashtags: remove #, trim whitespace, and filter empty ones
         let hashtagArray = hashtags
             .split(separator: " ")
             .map { String($0).trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty }
             .map { $0.hasPrefix("#") ? String($0.dropFirst()) : $0 }
+            .filter { !$0.isEmpty }  // Filter again after removing #
         
         print("Saving hashtags: \(hashtagArray)")
         
         do {
             try await feedViewModel.updateVideo(video, caption: caption, hashtags: hashtagArray)
+            
+            // Refresh the feed data
+            await feedViewModel.loadInitialVideos()
+            
             isPresented = false
         } catch {
             alertMessage = error.localizedDescription

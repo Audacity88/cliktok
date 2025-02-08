@@ -17,103 +17,187 @@ struct VideoUploadView: View {
     @State private var videoURL: URL?
     @State private var showAlert = false
     @State private var alertMessage = ""
+    @State private var showingCamera = false
+    @State private var showSuccessMessage = false
+    @FocusState private var isInputActive: Bool
+    
+    private func resetUploadForm() {
+        videoURL = nil
+        caption = ""
+        hashtags = ""
+        selectedItem = nil
+        showSuccessMessage = false
+        viewModel.isAdvertisement = false
+    }
     
     var body: some View {
-        NavigationView {
-            if Auth.auth().currentUser?.isAnonymous == true {
-                GuestRestrictedView()
-            } else {
-                Form {
-                    if viewModel.isUserMarketer {
-                        Section(header: Text("Marketing Options").foregroundColor(.blue)) {
-                            Toggle(isOn: $viewModel.isAdvertisement) {
-                                Label {
-                                    Text("Mark as Advertisement")
-                                } icon: {
-                                    Image(systemName: "megaphone.fill")
-                                        .foregroundColor(.blue)
-                                }
+        if Auth.auth().currentUser?.isAnonymous == true {
+            GuestRestrictedView()
+        } else {
+            Form {
+                if showSuccessMessage {
+                    Section {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Video recorded successfully!")
+                                .foregroundColor(.green)
+                        }
+                        .listRowBackground(Color.green.opacity(0.1))
+                    }
+                }
+                
+                if viewModel.isUserMarketer {
+                    Section(header: Text("Marketing Options").foregroundColor(.blue)) {
+                        Toggle(isOn: $viewModel.isAdvertisement) {
+                            Label {
+                                Text("Mark as Advertisement")
+                            } icon: {
+                                Image(systemName: "megaphone.fill")
+                                    .foregroundColor(.blue)
                             }
-                            .tint(.blue)
+                        }
+                        .tint(.blue)
+                    }
+                }
+                
+                Section {
+                    // Record new video button
+                    Button(action: {
+                        showingCamera = true
+                    }) {
+                        HStack {
+                            Image(systemName: "camera.fill")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                            Text("Record New Video")
+                                .foregroundColor(.blue)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                    
+                    // Choose existing video button
+                    PhotosPicker(selection: $selectedItem,
+                               matching: .videos,
+                               photoLibrary: .shared()) {
+                        if selectedItem == nil {
+                            HStack {
+                                Image(systemName: "photo.fill")
+                                    .font(.title2)
+                                    .foregroundColor(.blue)
+                                Text("Choose from Library")
+                                    .foregroundColor(.blue)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
+                        } else {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Change Video")
+                                    .foregroundColor(.blue)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
                         }
                     }
                     
-                    Section {
-                        PhotosPicker(selection: $selectedItem,
-                                   matching: .videos,
-                                   photoLibrary: .shared()) {
-                            Label(selectedItem == nil ? "Select Video" : "Change Video",
-                                  systemImage: "video.badge.plus")
+                    if viewModel.isUploading {
+                        ProgressView("Uploading...", value: viewModel.progress, total: 1.0)
+                    }
+                    
+                    if videoURL != nil {
+                        Button("Preview Video") {
+                            showingPreview = true
                         }
-                        
+                    }
+                }
+                
+                Section(header: Text("Details")) {
+                    TextField("Caption", text: $caption)
+                        .textInputAutocapitalization(.sentences)
+                        .focused($isInputActive)
+                    HashtagTextField(text: $hashtags, placeholder: "Enter hashtags")
+                        .focused($isInputActive)
+                }
+                
+                Section {
+                    Button(action: uploadVideo) {
                         if viewModel.isUploading {
-                            ProgressView("Uploading...", value: viewModel.progress, total: 1.0)
-                        }
-                        
-                        if videoURL != nil {
-                            Button("Preview Video") {
-                                showingPreview = true
-                            }
+                            ProgressView()
+                        } else {
+                            Text("Upload Video")
+                                .frame(maxWidth: .infinity)
+                                .foregroundColor(.white)
                         }
                     }
-                    
-                    Section(header: Text("Details")) {
-                        TextField("Caption", text: $caption)
-                        HashtagTextField(text: $hashtags, placeholder: "Enter hashtags")
-                    }
-                    
-                    Section {
-                        Button(action: uploadVideo) {
-                            if viewModel.isUploading {
-                                ProgressView()
-                            } else {
-                                Text("Upload Video")
-                            }
+                    .disabled(videoURL == nil || caption.isEmpty || viewModel.isUploading)
+                    .listRowBackground(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(videoURL == nil || caption.isEmpty || viewModel.isUploading ? Color.gray : Color.blue)
+                            .padding(.vertical, 4)
+                    )
+                }
+            }
+            .navigationTitle(viewModel.isUserMarketer ? "Upload Marketing Video" : "Upload Video")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if isInputActive {
+                        Button("Done") {
+                            isInputActive = false
                         }
-                        .disabled(videoURL == nil || caption.isEmpty || viewModel.isUploading)
-                    }
-                }
-                .navigationTitle(viewModel.isUserMarketer ? "Upload Marketing Video" : "Upload Video")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                    }
-                }
-                .onChange(of: selectedItem) { oldValue, newValue in
-                    if let newValue {
-                        handleSelection(newValue)
-                    }
-                }
-                .alert("Error", isPresented: $showAlert) {
-                    Button("OK", role: .cancel) { }
-                } message: {
-                    Text(alertMessage)
-                }
-                .sheet(isPresented: $showingPreview) {
-                    if let previewURL = videoURL {
-                        VideoPreviewView(videoURL: previewURL)
                     }
                 }
             }
-        }
-        .onAppear {
-            // Check marketer status immediately when view appears
-            viewModel.checkMarketerStatus()
-            
-            viewModel.onUploadComplete = {
-                Task {
-                    scrollToTop = true
-                    await feedViewModel.loadInitialVideos()
-                    dismiss()
-                    onDismiss()
+            .onChange(of: selectedItem) { oldValue, newValue in
+                if let newValue {
+                    handleSelection(newValue)
                 }
             }
-        }
-        .onChange(of: AuthenticationManager.shared.isMarketer) { oldValue, newValue in
-            viewModel.checkMarketerStatus()
+            .alert("Error", isPresented: $showAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(alertMessage)
+            }
+            .sheet(isPresented: $showingPreview) {
+                if let previewURL = videoURL {
+                    VideoPreviewView(videoURL: previewURL)
+                }
+            }
+            .fullScreenCover(isPresented: $showingCamera) {
+                CameraView { url in
+                    self.videoURL = url
+                    self.showSuccessMessage = true
+                    
+                    // Hide success message after a delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        withAnimation {
+                            self.showSuccessMessage = false
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                // Check marketer status immediately when view appears
+                viewModel.checkMarketerStatus()
+                
+                viewModel.onUploadComplete = {
+                    Task {
+                        scrollToTop = true
+                        await feedViewModel.loadInitialVideos()
+                        resetUploadForm()
+                        onDismiss()
+                    }
+                }
+            }
+            .onChange(of: AuthenticationManager.shared.isMarketer) { oldValue, newValue in
+                viewModel.checkMarketerStatus()
+            }
         }
     }
     

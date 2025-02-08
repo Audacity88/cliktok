@@ -86,7 +86,7 @@
 - [ ] AI Moderation Integration
   - [ ] Google Cloud Vision API setup
   - [ ] Content filtering rules
-  - [ ] Automated content flagging
+  - [ ] Automated content flagging for kids
   - [ ] AI tagging/description
 - [ ] User Reporting System
   - [ ] Report functionality

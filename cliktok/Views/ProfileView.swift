@@ -271,8 +271,20 @@ struct ProfileContentView: View {
                 if !viewModel.userVideos.isEmpty {
                     VideoGridView(videos: viewModel.userVideos, showBackButton: false)
                 } else {
-                    ProgressView()
-                        .padding()
+                    VStack(spacing: 16) {
+                        Image(systemName: "film")
+                            .font(.system(size: 48))
+                            .foregroundColor(.gray)
+                        Text("No videos yet")
+                            .font(.headline)
+                            .foregroundColor(.gray)
+                        if isCurrentUser {
+                            Text("Start sharing your first video!")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: 200)
                 }
             }
         }
