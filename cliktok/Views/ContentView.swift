@@ -62,6 +62,16 @@ struct ContentView: View {
             } else if authManager.isAuthenticated {
                 TabView(selection: $selectedTab) {
                     NavigationStack {
+                        ArchiveTabView()
+                            .environmentObject(feedViewModel)
+                    }
+                    .tabItem {
+                        Image(systemName: "film.stack")
+                        Text("Archive")
+                    }
+                    .tag(0)
+                    
+                    NavigationStack {
                         VideoFeedView(scrollToTop: $scrollToTop)
                             .environmentObject(feedViewModel)
                             .navigationBarTitleDisplayMode(.inline)
@@ -71,14 +81,6 @@ struct ContentView: View {
                     .tabItem {
                         Image(systemName: "house.fill")
                         Text("Home")
-                    }
-                    .tag(0)
-                    
-                    ArchiveTabView()
-                        .environmentObject(feedViewModel)
-                    .tabItem {
-                        Image(systemName: "film.stack")
-                        Text("Archive")
                     }
                     .tag(1)
                     

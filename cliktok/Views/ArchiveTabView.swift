@@ -3,10 +3,28 @@ import AVKit
 import Foundation
 
 struct ArchiveTabView: View {
-    @StateObject private var viewModel = ArchiveVideoViewModel()
+    @StateObject private var viewModel: ArchiveVideoViewModel
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     @State private var currentIndex = 0
     @State private var showCollections = false
+    @State private var isPrefetching = false
+    @State private var visibleRange: Range<Int> = 0..<3
+    
+    init() {
+        _viewModel = StateObject(wrappedValue: ArchiveVideoViewModel())
+    }
+    
+    private func getOptimizedVideoURL(_ url: String) -> String {
+        // Try to get mp4 version for m4v files
+        if url.hasSuffix(".m4v") {
+            let mp4URL = url.replacingOccurrences(of: ".m4v", with: ".mp4")
+            print("ArchiveTabView: Attempting to use MP4 version: \(mp4URL)")
+            return mp4URL
+        }
+        
+        // For other formats, keep original URL
+        return url
+    }
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -14,7 +32,7 @@ struct ArchiveTabView: View {
                 ZStack {
                     Color.black.edgesIgnoringSafeArea(.all)
                     
-                    if viewModel.isLoading {
+                    if viewModel.isLoading && viewModel.selectedCollection?.videos.isEmpty == true {
                         LoadingView()
                     } else if let selectedCollection = viewModel.selectedCollection,
                               !selectedCollection.videos.isEmpty {
@@ -23,7 +41,7 @@ struct ArchiveTabView: View {
                                 VideoPlayerView(
                                     video: Video(
                                         userID: "archive",
-                                        videoURL: archiveVideo.videoURL,
+                                        videoURL: getOptimizedVideoURL(archiveVideo.videoURL),
                                         caption: archiveVideo.title,
                                         hashtags: ["archive"]
                                     ),
@@ -35,13 +53,33 @@ struct ArchiveTabView: View {
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .rotationEffect(.degrees(-90))
                                 .tag(index)
-                                .onAppear {
+                                .task(id: index) {
+                                    guard index == currentIndex else { return }
                                     print("ArchiveTabView: Video \(index) appeared")
-                                    prefetchUpcomingVideos(currentIndex: index, in: selectedCollection)
+                                    
+                                    // Update visible range when current index changes
+                                    let newStart = max(0, index - 1)
+                                    let newEnd = min(selectedCollection.videos.count, index + 2)
+                                    visibleRange = newStart..<newEnd
+                                    
+                                    // Load more videos if needed
+                                    await viewModel.loadMoreVideosIfNeeded(for: selectedCollection, currentIndex: index)
+                                    
+                                    if let collection = viewModel.selectedCollection {
+                                        await prefetchUpcomingVideos(currentIndex: index, in: collection)
+                                    }
                                 }
                                 .onDisappear {
                                     print("ArchiveTabView: Video \(index) disappeared")
-                                    cleanupDistantVideos(currentIndex: index, in: selectedCollection)
+                                    if let collection = viewModel.selectedCollection {
+                                        cleanupDistantVideos(currentIndex: index, in: collection)
+                                    }
+                                }
+                                .overlay(alignment: .bottom) {
+                                    if viewModel.isLoading && index == selectedCollection.videos.count - 1 {
+                                        ProgressView()
+                                            .padding()
+                                    }
                                 }
                             }
                         }
@@ -70,24 +108,36 @@ struct ArchiveTabView: View {
                 .onChange(of: currentIndex) { oldValue, newValue in
                     print("ArchiveTabView: Switched from video \(oldValue) to \(newValue)")
                     if let collection = viewModel.selectedCollection {
-                        prefetchUpcomingVideos(currentIndex: newValue, in: collection)
-                        cleanupDistantVideos(currentIndex: newValue, in: collection)
+                        Task {
+                            // Update visible range when current index changes
+                            let newStart = max(0, newValue - 1)
+                            let newEnd = min(collection.videos.count, newValue + 2)
+                            visibleRange = newStart..<newEnd
+                            
+                            // Load more videos if needed
+                            await viewModel.loadMoreVideosIfNeeded(for: collection, currentIndex: newValue)
+                            
+                            await prefetchUpcomingVideos(currentIndex: newValue, in: collection)
+                            cleanupDistantVideos(currentIndex: newValue, in: collection)
+                        }
                     }
                 }
-                .task {
+                .task(id: viewModel.selectedCollection?.id) {
                     if let collection = viewModel.selectedCollection,
-                       !collection.videos.isEmpty,
-                       let firstVideoURL = URL(string: collection.videos[0].videoURL) {
-                        print("ArchiveTabView: Prefetching first video immediately")
-                        await VideoAssetLoader.shared.prefetchWithPriority(for: firstVideoURL, priority: .high)
-                    }
-                    if let collection = viewModel.selectedCollection {
-                        prefetchUpcomingVideos(currentIndex: 0, in: collection)
+                       !collection.videos.isEmpty {
+                        // Only preload the first video initially
+                        if let firstVideoURL = URL(string: getOptimizedVideoURL(collection.videos[0].videoURL)) {
+                            print("ArchiveTabView: Aggressively preloading first video")
+                            await VideoAssetLoader.shared.prefetchWithPriority(for: firstVideoURL, priority: .high)
+                        }
+                        
+                        // Set initial visible range
+                        visibleRange = 0..<min(3, collection.videos.count)
                     }
                 }
             }
             
-            // Fixed position collections button
+            // Collections button
             Button {
                 showCollections = true
             } label: {
@@ -107,25 +157,39 @@ struct ArchiveTabView: View {
         }
     }
     
-    private func prefetchUpcomingVideos(currentIndex: Int, in collection: ArchiveCollection) {
-        // Prefetch next 2 videos
-        for offset in 1...2 {
-            let nextIndex = currentIndex + offset
-            guard nextIndex < collection.videos.count else { continue }
+    private func prefetchUpcomingVideos(currentIndex: Int, in collection: ArchiveCollection) async {
+        guard !isPrefetching else { return }
+        isPrefetching = true
+        defer { isPrefetching = false }
+        
+        // Prefetch only one video ahead to reduce load
+        let nextIndex = currentIndex + 1
+        guard nextIndex < collection.videos.count,
+              visibleRange.contains(nextIndex) else { return }
+        
+        let videoURL = collection.videos[nextIndex].videoURL
+        if let url = URL(string: getOptimizedVideoURL(videoURL)) {
+            print("ArchiveTabView: Prefetching video at index \(nextIndex)")
             
-            if let nextURL = URL(string: collection.videos[nextIndex].videoURL) {
-                print("ArchiveTabView: Prefetching video at index \(nextIndex)")
-                Task {
-                    await VideoAssetLoader.shared.prefetchWithPriority(for: nextURL, priority: offset == 1 ? .high : .medium)
-                }
+            // Start prefetching with high priority
+            Task {
+                await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .high)
             }
         }
     }
     
     private func cleanupDistantVideos(currentIndex: Int, in collection: ArchiveCollection) {
-        // Cleanup videos that are more than 2 positions away
+        // Calculate buffer bounds safely
+        let lowerBound = max(0, currentIndex - 1)
+        let upperBound = min(collection.videos.count - 1, currentIndex + 1)
+        
+        // Only proceed if we have valid bounds
+        guard lowerBound <= upperBound else { return }
+        let keepRange = lowerBound...upperBound
+        
+        // Cleanup videos outside the keep range
         for (index, video) in collection.videos.enumerated() {
-            if abs(index - currentIndex) > 2 {
+            if !keepRange.contains(index) {
                 if let url = URL(string: video.videoURL) {
                     print("ArchiveTabView: Cleaning up distant video at index \(index)")
                     VideoAssetLoader.shared.cleanupAsset(for: url)

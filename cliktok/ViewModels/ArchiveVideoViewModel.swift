@@ -1,11 +1,17 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 class ArchiveVideoViewModel: ObservableObject {
     @Published var collections: [ArchiveCollection] = []
     @Published var selectedCollection: ArchiveCollection?
     @Published var isLoading = false
     @Published var error: String?
+    
+    private let api = InternetArchiveAPI.shared
+    private var loadedRanges: [String: Set<Range<Int>>] = [:]
+    private let pageSize = 5
+    private var isLoadingMore = false
     
     init() {
         // Add initial collections
@@ -37,45 +43,103 @@ class ArchiveVideoViewModel: ObservableObject {
             ]
         )
         
-        // Demolition Kitchen Collection
-        let demolitionKitchen = ArchiveCollection(
-            id: "demolitionkitchenvideo",
-            title: "Demolition Kitchen",
-            description: "Videos from the Demolition Kitchen collection",
-            thumbnailURL: "https://archive.org/services/img/demolitionkitchenvideo"
-        )
+        // Add Internet Archive Collections
+        let archiveCollections = [
+            (id: "demolitionkitchenvideo", title: "Demolition Kitchen", description: "Videos from the Demolition Kitchen collection"),
+            (id: "prelinger", title: "Prelinger Archives", description: "Historical films from the Prelinger Archives"),
+            (id: "animation_movies", title: "Animation Movies", description: "Classic animated films from the public domain")
+        ]
         
-        collections = [testVideos, demolitionKitchen]
+        let archiveCollectionModels = archiveCollections.map { collection in
+            ArchiveCollection(
+                id: collection.id,
+                title: collection.title,
+                description: collection.description,
+                thumbnailURL: InternetArchiveAPI.getThumbnailURL(identifier: collection.id).absoluteString
+            )
+        }
+        
+        collections = [testVideos] + archiveCollectionModels
         selectedCollection = testVideos
     }
     
     func loadCollectionVideos(for collection: ArchiveCollection) async {
-        guard collection.id == "demolitionkitchenvideo" else { return }
+        guard collection.id != "test_videos" else { return }
         
         isLoading = true
-        defer { isLoading = false }
+        error = nil
+        
+        // Initialize empty collection if needed
+        if let index = collections.firstIndex(where: { $0.id == collection.id }) {
+            var updatedCollection = collection
+            if updatedCollection.videos.isEmpty {
+                updatedCollection.videos = []
+                collections[index] = updatedCollection
+                selectedCollection = updatedCollection
+            }
+        }
+        
+        // Load initial page
+        await loadMoreVideos(for: collection, startIndex: 0)
+        
+        isLoading = false
+    }
+    
+    func loadMoreVideosIfNeeded(for collection: ArchiveCollection, currentIndex: Int) async {
+        guard !isLoadingMore,
+              collection.id != "test_videos",
+              currentIndex >= collection.videos.count - 2 // Load more when approaching end
+        else { return }
+        
+        await loadMoreVideos(for: collection, startIndex: collection.videos.count)
+    }
+    
+    private func loadMoreVideos(for collection: ArchiveCollection, startIndex: Int) async {
+        guard !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        
+        // Check if range is already loaded
+        let range = startIndex..<(startIndex + pageSize)
+        if loadedRanges[collection.id]?.contains(where: { $0.overlaps(range) }) ?? false {
+            return
+        }
         
         do {
-            // TODO: Implement proper Internet Archive API
-            // For now, adding some sample videos from the collection
-            var updatedCollection = collection
-            updatedCollection.videos = [
-                ArchiveVideo(
-                    title: "Demolition Kitchen - Episode 1",
-                    videoURL: "https://archive.org/download/demolitionkitchenvideo/Demolition%20Kitchen%20-%20Episode%201.mp4",
-                    description: "First episode of Demolition Kitchen"
-                ),
-                ArchiveVideo(
-                    title: "Demolition Kitchen - Episode 2",
-                    videoURL: "https://archive.org/download/demolitionkitchenvideo/Demolition%20Kitchen%20-%20Episode%202.mp4",
-                    description: "Second episode of Demolition Kitchen"
-                )
-            ]
+            let videos = try await api.fetchCollectionItems(
+                identifier: collection.id,
+                offset: startIndex,
+                limit: pageSize
+            )
             
-            if let index = collections.firstIndex(where: { $0.id == collection.id }) {
-                collections[index] = updatedCollection
-                if selectedCollection?.id == collection.id {
-                    selectedCollection = updatedCollection
+            if !videos.isEmpty {
+                if let index = collections.firstIndex(where: { $0.id == collection.id }) {
+                    var updatedCollection = collections[index]
+                    
+                    // Append new videos
+                    if startIndex >= updatedCollection.videos.count {
+                        updatedCollection.videos.append(contentsOf: videos)
+                    } else {
+                        // Insert videos at correct position
+                        for (i, video) in videos.enumerated() {
+                            let insertIndex = startIndex + i
+                            if insertIndex < updatedCollection.videos.count {
+                                updatedCollection.videos[insertIndex] = video
+                            } else {
+                                updatedCollection.videos.append(video)
+                            }
+                        }
+                    }
+                    
+                    collections[index] = updatedCollection
+                    if selectedCollection?.id == collection.id {
+                        selectedCollection = updatedCollection
+                    }
+                    
+                    // Mark range as loaded
+                    var ranges = loadedRanges[collection.id] ?? Set<Range<Int>>()
+                    ranges.insert(range)
+                    loadedRanges[collection.id] = ranges
                 }
             }
         } catch {
