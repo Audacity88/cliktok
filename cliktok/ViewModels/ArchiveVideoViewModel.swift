@@ -48,7 +48,7 @@ class ArchiveVideoViewModel: ObservableObject {
         let archiveCollections = [
             (id: "demolitionkitchenvideo", title: "Demolition Kitchen", description: "Videos from the Demolition Kitchen collection"),
             (id: "prelinger", title: "Prelinger Archives", description: "Historical films from the Prelinger Archives"),
-            (id: "animation_movies", title: "Animation Movies", description: "Classic animated films from the public domain")
+            (id: "artsandmusicvideos", title: "Arts & Music", description: "A collection of arts and music videos from the Internet Archive")
         ]
         
         let archiveCollectionModels = archiveCollections.map { collection in

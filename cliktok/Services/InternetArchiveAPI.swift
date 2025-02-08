@@ -153,15 +153,26 @@ actor InternetArchiveAPI {
         
         let searchURL = URL(string: "\(Self.baseURL)/advancedsearch.php")!
         var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
-        components.queryItems = [
+        
+        // Base query items
+        var queryItems = [
             URLQueryItem(name: "q", value: "collection:\(identifier) AND (mediatype:movies OR mediatype:movingimage)"),
             URLQueryItem(name: "fl[]", value: "identifier,title,description,mediatype"),
             URLQueryItem(name: "output", value: "json"),
             URLQueryItem(name: "rows", value: "\(limit)"),
-            URLQueryItem(name: "page", value: "\(page)"),
-            URLQueryItem(name: "sort[]", value: "-downloads"),
-            URLQueryItem(name: "sort[]", value: "-week")  // Also sort by recent popularity
+            URLQueryItem(name: "page", value: "\(page)")
         ]
+        
+        // Add collection-specific sorting
+        if identifier == "artsandmusicvideos" {
+            queryItems.append(URLQueryItem(name: "sort[]", value: "-reviewdate"))
+        } else {
+            // Default sorting for other collections
+            queryItems.append(URLQueryItem(name: "sort[]", value: "-downloads"))
+            queryItems.append(URLQueryItem(name: "sort[]", value: "-week"))
+        }
+        
+        components.queryItems = queryItems
         
         let (data, response) = try await URLSession.shared.data(from: components.url!)
         
