@@ -196,6 +196,264 @@ actor VideoAssetLoader {
     }
 }
 
+// Video Controls Overlay
+struct VideoControlsOverlay: View {
+    let showControls: Bool
+    let isPlaying: Bool
+    let togglePlayPause: () -> Void
+    
+    var body: some View {
+        Button(action: togglePlayPause) {
+            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 60, height: 60)
+                .foregroundColor(.white)
+                .contentShape(Rectangle()) // Make entire frame tappable
+                .background(
+                    Color.black.opacity(0.01)
+                        .frame(width: 100, height: 100)
+                        .contentShape(Rectangle())
+                )
+        }
+        .buttonStyle(PlainButtonStyle()) // Prevent default button styling
+        .opacity(showControls ? 0.8 : 0)
+        .animation(.easeInOut(duration: 0.2), value: showControls)
+    }
+}
+
+// Video Progress Overlay
+struct VideoProgressOverlay: View {
+    let duration: Double
+    let showControls: Bool
+    @Binding var currentTime: Double
+    @Binding var isDraggingProgress: Bool
+    let isPlaying: Bool
+    let player: AVPlayer
+    let resetControlsTimer: () -> Void
+    
+    var body: some View {
+        VStack {
+            Spacer()
+            ProgressBar(
+                value: $currentTime,
+                total: duration,
+                isDragging: $isDraggingProgress,
+                onChanged: { newValue in
+                    currentTime = newValue
+                    let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                    player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                    resetControlsTimer()
+                },
+                onEnded: { newValue in
+                    currentTime = newValue
+                    let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                    player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                        if finished && isPlaying {
+                            player.play()
+                        }
+                    }
+                    resetControlsTimer()
+                }
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 200)
+            .opacity(showControls || isDraggingProgress ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: showControls)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// Video Menu Button
+struct VideoMenuButton: View {
+    let showEditSheet: Binding<Bool>
+    let showDeleteAlert: Binding<Bool>
+    
+    var body: some View {
+        Menu {
+            Button {
+                showEditSheet.wrappedValue = true
+            } label: {
+                Label("Edit Video", systemImage: "pencil")
+            }
+            
+            Button(role: .destructive) {
+                showDeleteAlert.wrappedValue = true
+            } label: {
+                Label("Delete Video", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title2)
+                .foregroundColor(.white)
+                .shadow(radius: 2)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .padding(.trailing)
+    }
+}
+
+// Video Control Buttons
+struct VideoControlButtons: View {
+    let totalTips: Int
+    let tipViewModel: TipViewModel
+    let isMuted: Bool
+    let video: Video
+    @Binding var showTipBubble: Bool
+    @Binding var showTippedText: Bool
+    @Binding var showAddFundsAlert: Bool
+    @Binding var showError: Bool
+    @Binding var errorMessage: String
+    let toggleMute: () -> Void
+    @State private var isHeartFilled = false
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // Like/Tip Button
+            VStack(spacing: 20) {
+                ZStack(alignment: .center) {
+                    // Container for fixed positioning
+                    VStack {
+                        Spacer()
+                            .frame(height: 32)
+                    }
+                    .frame(width: 100, height: 80)
+                    
+                    // Heart button with retro styling
+                    VStack(spacing: 4) {
+                        Button(action: {
+                            Task {
+                                do {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        isHeartFilled = true
+                                    }
+                                    guard let videoId = video.id else { return }
+                                    try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
+                                    withAnimation {
+                                        showTipBubble = true
+                                        showTippedText = true
+                                    }
+                                    
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        showTipBubble = false
+                                        showTippedText = false
+                                    }
+                                } catch PaymentError.insufficientFunds {
+                                    showAddFundsAlert = true
+                                } catch {
+                                    showError = true
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "heart\(isHeartFilled || totalTips > 0 ? ".fill" : "")")
+                                    .resizable()
+                                    .frame(width: 32, height: 32)
+                                    .foregroundColor(isHeartFilled || totalTips > 0 ? .red : .gray)
+                                    .shadow(radius: 2)
+                                
+                                Text("\(totalTips)¢")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.gray)
+                                    .shadow(radius: 1)
+                            }
+                        }
+                    }
+                    .offset(x: 40, y: 35)
+                    
+                    if showTippedText {
+                        Text("Tipped!")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.green)
+                            .shadow(radius: 1)
+                            .frame(width: 100)
+                            .offset(x: 40, y: 27)
+                            .transition(.opacity)
+                    }
+                    
+                    if showTipBubble {
+                        TipBubbleView()
+                            .offset(x: 60, y: -30)
+                    }
+                }
+            }
+            .disabled(tipViewModel.isProcessing)
+            
+            // Mute Button
+            Button(action: toggleMute) {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.gray)
+                    .shadow(radius: 2)
+            }
+            .offset(x: 40, y: 10)
+            
+            // View Count
+            VStack(spacing: 4) {
+                Image(systemName: "eye.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.gray)
+                    .shadow(radius: 2)
+                Text("\(video.views)")
+                    .foregroundColor(.gray)
+                    .font(.system(size: 14, design: .monospaced))
+                    .shadow(radius: 2)
+            }
+            .offset(x: 40, y: 10)
+        }
+        .padding(.trailing)
+    }
+}
+
+// Video Info Section
+struct VideoInfoSection: View {
+    let video: Video
+    let creator: User?
+    let geometry: GeometryProxy
+    let totalTips: Int
+    let tipViewModel: TipViewModel
+    let isMuted: Bool
+    @Binding var showTipBubble: Bool
+    @Binding var showTippedText: Bool
+    @Binding var showAddFundsAlert: Bool
+    @Binding var showError: Bool
+    @Binding var errorMessage: String
+    let toggleMute: () -> Void
+    
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            RetroVideoInfo(
+                title: video.caption,
+                description: video.description,
+                hashtags: video.hashtags,
+                creator: creator,
+                showCreator: true
+            )
+            .frame(maxWidth: geometry.size.width * 0.85, alignment: .leading)
+            
+            Spacer(minLength: 0)
+            
+            VideoControlButtons(
+                totalTips: totalTips,
+                tipViewModel: tipViewModel,
+                isMuted: isMuted,
+                video: video,
+                showTipBubble: $showTipBubble,
+                showTippedText: $showTippedText,
+                showAddFundsAlert: $showAddFundsAlert,
+                showError: $showError,
+                errorMessage: $errorMessage,
+                toggleMute: toggleMute
+            )
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 30)
+    }
+}
+
 struct VideoPlayerView: View {
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     @StateObject private var tipViewModel = TipViewModel.shared
@@ -233,6 +491,8 @@ struct VideoPlayerView: View {
     @State private var loopObserver: NSObjectProtocol?
     @State private var errorObserver: NSObjectProtocol?
     let onPrefetch: (([Video]) -> Void)?
+    @State private var lastControlReset = Date()
+    @State private var isResettingControls = false
     
     init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, onPrefetch: (([Video]) -> Void)? = nil) {
         self.video = video
@@ -254,86 +514,76 @@ struct VideoPlayerView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
+            ZStack(alignment: .top) {
+                // Black background
+                Color.black.edgesIgnoringSafeArea(.all)
+                
+                // Video player and controls
                 if let player = player {
                     VideoPlayer(player: player)
                         .edgesIgnoringSafeArea(.all)
                         .frame(width: geometry.size.width, height: geometry.size.height)
-                        .overlay(
-                            Color.black.opacity(0.01)  // Nearly transparent overlay to catch taps
-                                .onTapGesture(count: 1) {
-                                    withAnimation {
-                                        showControls.toggle()
-                                        resetControlsTimer()
-                                    }
-                                }
-                                .allowsHitTesting(duration <= 30) // Only allow tap gesture if no progress bar
-                        )
-                        .overlay(
-                            Group {
-                                if duration > 30 && showControls {
-                                    VStack {
-                                        Spacer()
-                                        // Progress bar
-                                        ProgressBar(
-                                            value: $currentTime,
-                                            total: duration,
-                                            isDragging: $isDraggingProgress,
-                                            onChanged: { newValue in
-                                                currentTime = newValue
-                                                // Seek while dragging for immediate feedback
-                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                        .overlay {
+                            ZStack {
+                                // Full-screen tap gesture area
+                                Color.black.opacity(0.01)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        withAnimation {
+                                            showControls.toggle()
+                                            print("Controls TOGGLED by tap - new state: \(showControls)")
+                                            if showControls {
                                                 resetControlsTimer()
-                                            },
-                                            onEnded: { newValue in
-                                                currentTime = newValue
-                                                // Seek with exact timing when drag ends
-                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                                    if finished && isPlaying {
-                                                        player.play()
-                                                    }
-                                                }
-                                                resetControlsTimer()
+                                            } else {
+                                                controlsTimer?.invalidate()
                                             }
+                                        }
+                                    }
+                                    .allowsHitTesting(true)
+
+                                // Controls layer
+                                VStack {
+                                    Spacer()
+                                    
+                                    // Center container for play/pause button
+                                    ZStack {
+                                        // Play/Pause button
+                                        VideoControlsOverlay(
+                                            showControls: showControls,
+                                            isPlaying: isPlaying,
+                                            togglePlayPause: togglePlayPause
                                         )
-                                        .frame(height: 20)
-                                        .padding(.horizontal)
-                                        .padding(.bottom, 200) // Fixed position above heart icon
-                                        .zIndex(1) // Ensure progress bar is above the tap overlay
+                                        .allowsHitTesting(true)
+                                        .zIndex(100) // Ensure button is on top of all layers
                                     }
+                                    .frame(maxWidth: .infinity)
+                                    .contentShape(Rectangle())
+                                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                    
+                                    Spacer()
+                                    
+                                    // Progress bar
+                                    VideoProgressOverlay(
+                                        duration: duration,
+                                        showControls: showControls,
+                                        currentTime: $currentTime,
+                                        isDraggingProgress: $isDraggingProgress,
+                                        isPlaying: isPlaying,
+                                        player: player,
+                                        resetControlsTimer: resetControlsTimer
+                                    )
+                                    .allowsHitTesting(true)
                                 }
                             }
-                        )
-                        .overlay(
-                            Group {
-                                if showControls {
-                                    Button(action: togglePlayPause) {
-                                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fit)
-                                            .frame(width: 60, height: 60)
-                                            .foregroundColor(.white)
-                                            .opacity(0.8)
-                                    }
-                                }
-                            }
-                        )
+                        }
                 } else if isLoadingVideo {
-                    Color.black
-                        .edgesIgnoringSafeArea(.all)
-                        .overlay(
-                            ProgressView()
-                                .tint(.white)
-                        )
-                } else {
-                    Color.black
-                        .edgesIgnoringSafeArea(.all)
+                    ProgressView()
+                        .tint(.white)
                 }
                 
-                // Back Button and Menu
-                VStack {
+                // Content overlay
+                VStack(spacing: 0) {
                     if showBackButton {
                         HStack {
                             Button(action: {
@@ -351,61 +601,17 @@ struct VideoPlayerView: View {
                             
                             Spacer()
                             
-                            // Add three-dot menu if user owns the video
                             if video.userID == Auth.auth().currentUser?.uid {
-                                Menu {
-                                    Button {
-                                        showEditSheet = true
-                                    } label: {
-                                        Label("Edit Video", systemImage: "pencil")
-                                    }
-                                    
-                                    Button(role: .destructive) {
-                                        showDeleteAlert = true
-                                    } label: {
-                                        Label("Delete Video", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                        .frame(width: 44, height: 44) // Increase touch target
-                                        .contentShape(Rectangle()) // Make entire frame tappable
-                                }
-                                .padding(.trailing)
+                                VideoMenuButton(showEditSheet: $showEditSheet, showDeleteAlert: $showDeleteAlert)
                             }
                         }
-                        .padding(.top, 50)
-                    } else {
-                        // Show menu even when back button is hidden
-                        if video.userID == Auth.auth().currentUser?.uid {
-                            HStack {
-                                Spacer()
-                                Menu {
-                                    Button {
-                                        showEditSheet = true
-                                    } label: {
-                                        Label("Edit Video", systemImage: "pencil")
-                                    }
-                                    
-                                    Button(role: .destructive) {
-                                        showDeleteAlert = true
-                                    } label: {
-                                        Label("Delete Video", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                        .frame(width: 44, height: 44) // Increase touch target
-                                        .contentShape(Rectangle()) // Make entire frame tappable
-                                }
-                                .padding(.trailing)
-                            }
-                            .padding(.top, 50)
+                        .padding(.top, 44) // Add padding to account for status bar
+                    } else if video.userID == Auth.auth().currentUser?.uid {
+                        HStack {
+                            Spacer()
+                            VideoMenuButton(showEditSheet: $showEditSheet, showDeleteAlert: $showDeleteAlert)
                         }
+                        .padding(.top, 44) // Add padding to account for status bar
                     }
                     
                     Spacer()
@@ -414,153 +620,26 @@ struct VideoPlayerView: View {
                     VStack {
                         Spacer()
                         
-                        // Video info and controls
-                        HStack(alignment: .bottom, spacing: 16) {
-                            // Video details
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(video.caption)
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .shadow(radius: 2)
-                                    .multilineTextAlignment(.leading)
-                                
-                                if !video.hashtags.isEmpty {
-                                    Text(video.hashtags.map { "#\($0)" }.joined(separator: " "))
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .font(.system(size: 14, weight: .medium))
-                                        .shadow(radius: 2)
-                                }
-                                
-                                if let creator = creator {
-                                    HStack(alignment: .center, spacing: 10) {
-                                        NavigationLink(destination: ProfileView(userId: video.userID)) {
-                                            ProfileImageView(imageURL: creator.profileImageURL, size: 40)
-                                        }
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(creator.displayName)
-                                                .font(.headline)
-                                                .foregroundColor(.white)
-                                                .shadow(radius: 2)
-                                        }
-                                    }
-                                    .padding(.top, 8)
-                                } else {
-                                    ProgressView()
-                                        .frame(width: 40, height: 40)
-                                        .padding(.top, 8)
-                                }
-                            }
-                            .frame(maxWidth: geometry.size.width * 0.7, alignment: .leading)
-                            
-                            Spacer()
-                            
-                            // Control buttons
-                            VStack(spacing: 20) {
-                                // Like/Tip Button
-                                VStack(spacing: 20) {
-                                    ZStack(alignment: .center) {
-                                        // Container for fixed positioning
-                                        VStack {
-                                            Spacer()
-                                                .frame(height: 32) // Match heart height
-                                        }
-                                        .frame(width: 100, height: 80) // Fixed container size
-                                        
-                                        // Heart button
-                                        VStack(spacing: 4) {
-                                            Button(action: {
-                                                Task {
-                                                    do {
-                                                        guard let videoId = video.id else { return }
-                                                        try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
-                                                        totalTips += 1
-                                                        
-                                                        // Show both animations
-                                                        withAnimation {
-                                                            showTipBubble = true
-                                                            showTippedText = true
-                                                        }
-                                                        
-                                                        // Hide animations after delay
-                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                                            showTipBubble = false
-                                                            showTippedText = false
-                                                        }
-                                                    } catch PaymentError.insufficientFunds {
-                                                        showAddFundsAlert = true
-                                                    } catch {
-                                                        showError = true
-                                                        errorMessage = error.localizedDescription
-                                                    }
-                                                }
-                                            }) {
-                                                VStack(spacing: 4) {
-                                                    Image(systemName: "heart\(totalTips > 0 ? ".fill" : "")")
-                                                        .resizable()
-                                                        .frame(width: 32, height: 32)
-                                                        .foregroundColor(totalTips > 0 ? .red : .white)
-                                                        .shadow(radius: 2)
-                                                    
-                                                    if totalTips > 0 {
-                                                        Text("\(totalTips)¢")
-                                                            .font(.system(size: 12, weight: .bold))
-                                                            .foregroundColor(.white)
-                                                            .shadow(radius: 1)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .offset(x: 40, y: 35)
-                                        
-                                        // Tipped text overlay
-                                        if showTippedText {
-                                            Text("Tipped!")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(.white)
-                                                .shadow(radius: 1)
-                                                .frame(width: 100)
-                                                .offset(x: 40, y: 27)
-                                                .transition(.opacity)
-                                        }
-                                        
-                                        // Tip bubble
-                                        if showTipBubble {
-                                            TipBubbleView()
-                                                .offset(x: 60, y: -30)
-                                        }
-                                    }
-                                }
-                                .disabled(tipViewModel.isProcessing)
-                                
-                                // Mute Button
-                                Button(action: toggleMute) {
-                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                }
-                                .offset(x: 40, y: 10) 
-                                
-                                // View Count
-                                VStack(spacing: 4) {
-                                    Image(systemName: "eye.fill")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                    Text("\(video.views)")
-                                        .foregroundColor(.white)
-                                        .font(.system(size: 14))
-                                        .shadow(radius: 2)
-                                }
-                                .offset(x: 40, y: 10) 
-                            }
-                            .padding(.trailing)
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 30)
+                        VideoInfoSection(
+                            video: video,
+                            creator: creator,
+                            geometry: geometry,
+                            totalTips: totalTips,
+                            tipViewModel: tipViewModel,
+                            isMuted: isMuted,
+                            showTipBubble: $showTipBubble,
+                            showTippedText: $showTippedText,
+                            showAddFundsAlert: $showAddFundsAlert,
+                            showError: $showError,
+                            errorMessage: $errorMessage,
+                            toggleMute: toggleMute
+                        )
                     }
                 }
+                
+                // Fixed status bar at the top
+                RetroStatusBar()
+                    .frame(height: 44)
             }
             .navigationBarHidden(true)
             .edgesIgnoringSafeArea(.all)
@@ -761,17 +840,22 @@ struct VideoPlayerView: View {
         print("Toggle play/pause called. Current state - isPlaying: \(isPlaying)")
         if isPlaying {
             player?.pause()
+            print("Video PAUSED")
         } else {
             player?.play()
+            print("Video PLAYING")
         }
         isPlaying.toggle()
         showPlayButton = !isPlaying
+        print("State after toggle - isPlaying: \(isPlaying), showPlayButton: \(showPlayButton)")
         
         if isPlaying {
             resetControlsTimer()
+            print("Controls timer reset due to play")
         } else {
             showControls = true
             controlsTimer?.invalidate()
+            print("Controls forced visible due to pause")
         }
     }
     
@@ -806,33 +890,52 @@ struct VideoPlayerView: View {
             // Update playing state
             let isCurrentlyPlaying = player.rate != 0
             if isPlaying != isCurrentlyPlaying {
+                print("Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(isPlaying)")
                 isPlaying = isCurrentlyPlaying
                 showPlayButton = !isCurrentlyPlaying
             }
             
-            // Hide controls after delay if video is playing
-            if isPlaying && showControls && !isDraggingProgress {
-                resetControlsTimer()
+            // Only reset controls if enough time has passed and we're not already resetting
+            if isPlaying && showControls && !isDraggingProgress && !isResettingControls {
+                let now = Date()
+                if now.timeIntervalSince(lastControlReset) >= 3.0 {
+                    print("Controls timer reset allowed - time since last reset: \(now.timeIntervalSince(lastControlReset))s")
+                    resetControlsTimer()
+                }
             }
         }
     }
     
     private func resetControlsTimer() {
+        guard !isResettingControls else { return }
+        isResettingControls = true
+        
         // Cancel existing timer
         controlsTimer?.invalidate()
         
         // Show controls
         withAnimation {
             showControls = true
+            print("Controls SHOWN - resetControlsTimer()")
         }
         
-        // Set new timer to hide controls after 3 seconds
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            if isPlaying && !isDraggingProgress {
-                withAnimation {
-                    showControls = false
+        lastControlReset = Date()
+        
+        // Only set timer if we're playing
+        if isPlaying && !isDraggingProgress {
+            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                if isPlaying && !isDraggingProgress {
+                    withAnimation {
+                        showControls = false
+                        print("Controls HIDDEN - timer expired")
+                    }
+                } else {
+                    print("Controls NOT hidden - isPlaying: \(isPlaying), isDraggingProgress: \(isDraggingProgress)")
                 }
+                isResettingControls = false
             }
+        } else {
+            isResettingControls = false
         }
     }
     
@@ -878,43 +981,39 @@ struct ProgressBar: View {
     
     var body: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                // Background track
                 Rectangle()
                     .fill(Color.gray.opacity(0.3))
-                    .frame(height: 20)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { gesture in
-                                let ratio = gesture.location.x / geometry.size.width
-                                let newValue = total * ratio
-                                isDragging = true
-                                onChanged(newValue)
-                            }
-                            .onEnded { gesture in
-                                let ratio = gesture.location.x / geometry.size.width
-                                let newValue = total * ratio
-                                onEnded(newValue)
-                                isDragging = false
-                            }
-                    )
-                    .overlay {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                // Progress track
-                                Rectangle()
-                                    .fill(Color.white)
-                                    .frame(width: geo.size.width * CGFloat(value / total), height: 20)
-                                
-                                // Handle
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 20, height: 20)
-                                    .position(x: geo.size.width * CGFloat(value / total), y: geo.size.height / 2)
-                            }
-                        }
-                    }
+                    .frame(height: 4)
+                
+                // Progress track
+                Rectangle()
+                    .fill(Color.green)
+                    .frame(width: geometry.size.width * CGFloat(value / total), height: 4)
+                
+                // Handle
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 12, height: 12)
+                    .position(x: geometry.size.width * CGFloat(value / total), y: geometry.size.height / 2)
             }
+            .contentShape(Rectangle())  // Make entire area tappable
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
+                        let newValue = total * Double(ratio)
+                        isDragging = true
+                        onChanged(newValue)
+                    }
+                    .onEnded { gesture in
+                        let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
+                        let newValue = total * Double(ratio)
+                        onEnded(newValue)
+                        isDragging = false
+                    }
+            )
         }
         .frame(height: 20)
     }

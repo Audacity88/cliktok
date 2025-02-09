@@ -1,6 +1,27 @@
 import SwiftUI
 
 #if os(iOS)
+
+// Separate view for video content
+struct VideoContentView: View {
+    let video: Video
+    let index: Int
+    let currentIndex: Int
+    let onPrefetch: () -> Void
+    @EnvironmentObject private var viewModel: VideoFeedViewModel
+    
+    var body: some View {
+        VideoPlayerView(
+            video: video,
+            showBackButton: false,
+            isVisible: .constant(index == currentIndex)
+        ) { _ in
+            onPrefetch()
+        }
+        .environmentObject(viewModel)
+    }
+}
+
 struct VideoFeedView: View {
     @EnvironmentObject private var viewModel: VideoFeedViewModel
     @State private var currentIndex = 0
@@ -20,12 +41,12 @@ struct VideoFeedView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(viewModel.videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video, 
-                                          showBackButton: false, 
-                                          isVisible: .constant(index == currentIndex)) { _ in
-                                prefetchVideo(at: index)
-                            }
-                            .environmentObject(viewModel)
+                            VideoContentView(
+                                video: video,
+                                index: index,
+                                currentIndex: currentIndex,
+                                onPrefetch: { prefetchVideo(at: index) }
+                            )
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .rotationEffect(.degrees(-90))
                             .tag(index)

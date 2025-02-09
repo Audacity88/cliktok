@@ -2,6 +2,130 @@ import SwiftUI
 import AVKit
 import Foundation
 
+struct RetroVideoInfo: View {
+    let title: String
+    let description: String?
+    let hashtags: [String]
+    let creator: User?
+    let showCreator: Bool
+    @State private var isDescriptionExpanded = false
+    private let maxCharacters = 100
+    
+    init(title: String, description: String? = nil, hashtags: [String], creator: User? = nil, showCreator: Bool = false) {
+        self.title = title
+        self.description = description
+        self.hashtags = hashtags
+        self.creator = creator
+        self.showCreator = showCreator
+    }
+    
+    private var shouldTruncate: Bool {
+        guard let description = description else { return false }
+        return description.count > maxCharacters
+    }
+    
+    private var displayedDescription: String {
+        guard let description = description else { return "" }
+        if !isDescriptionExpanded && shouldTruncate {
+            let index = description.index(description.startIndex, offsetBy: maxCharacters)
+            return String(description[..<index]) + "..."
+        }
+        return description
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // Title
+            Text(title)
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundColor(.green)
+            
+            // Hashtags
+            Text(hashtags.map { "#\($0)" }.joined(separator: " "))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundColor(.gray)
+            
+            // Description
+            if let description = description {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayedDescription)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.green.opacity(0.8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.trailing, -80)
+                    
+                    if shouldTruncate {
+                        Button(action: {
+                            withAnimation {
+                                isDescriptionExpanded.toggle()
+                            }
+                        }) {
+                            Text(isDescriptionExpanded ? "Show less" : "Show more")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.green)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+            }
+            
+            // Creator Profile
+            if showCreator, let creator = creator {
+                HStack(alignment: .center, spacing: 8) {
+                    NavigationLink(destination: ProfileView(userId: creator.id)) {
+                        ProfileImageView(imageURL: creator.profileImageURL, size: 32)
+                    }
+                    
+                    Text(creator.displayName)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.bottom, -12)
+        .padding(.top, 16)
+    }
+}
+
+struct RetroProgressBar: View {
+    let progress: Double
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 4)
+                
+                Rectangle()
+                    .fill(Color.green)
+                    .frame(width: geometry.size.width * progress, height: 4)
+            }
+        }
+        .frame(height: 4)
+    }
+}
+
+struct RetroControlButton: View {
+    let systemName: String
+    let action: () -> Void
+    var isActive: Bool = false
+    
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 24))
+                .foregroundColor(isActive ? .green : .white)
+                .frame(width: 44, height: 44)
+                .background(Color.black.opacity(0.5))
+                .clipShape(Circle())
+        }
+    }
+}
+
 struct ArchiveTabView: View {
     @StateObject private var viewModel: ArchiveVideoViewModel
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
@@ -15,14 +139,11 @@ struct ArchiveTabView: View {
     }
     
     private func getOptimizedVideoURL(_ url: String) -> String {
-        // Try to get mp4 version for m4v files
         if url.hasSuffix(".m4v") {
             let mp4URL = url.replacingOccurrences(of: ".m4v", with: ".mp4")
             print("ArchiveTabView: Attempting to use MP4 version: \(mp4URL)")
             return mp4URL
         }
-        
-        // For other formats, keep original URL
         return url
     }
     
@@ -38,18 +159,21 @@ struct ArchiveTabView: View {
                               !selectedCollection.videos.isEmpty {
                         TabView(selection: $currentIndex) {
                             ForEach(Array(selectedCollection.videos.enumerated()), id: \.element.id) { index, archiveVideo in
-                                VideoPlayerView(
-                                    video: Video(
-                                        userID: "archive",
-                                        videoURL: getOptimizedVideoURL(archiveVideo.videoURL),
-                                        caption: archiveVideo.title,
-                                        hashtags: ["archive"]
-                                    ),
-                                    showBackButton: false,
-                                    clearSearchOnDismiss: .constant(false),
-                                    isVisible: .constant(index == currentIndex)
-                                )
-                                .environmentObject(feedViewModel)
+                                ZStack {
+                                    VideoPlayerView(
+                                        video: Video(
+                                            userID: "archive",
+                                            videoURL: getOptimizedVideoURL(archiveVideo.videoURL),
+                                            caption: archiveVideo.title,
+                                            description: archiveVideo.description,
+                                            hashtags: ["archive"]
+                                        ),
+                                        showBackButton: false,
+                                        clearSearchOnDismiss: .constant(false),
+                                        isVisible: .constant(index == currentIndex)
+                                    )
+                                    .environmentObject(feedViewModel)
+                                }
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .rotationEffect(.degrees(-90))
                                 .tag(index)
@@ -97,11 +221,13 @@ struct ArchiveTabView: View {
                     } else {
                         VStack {
                             Text("No videos available")
-                                .foregroundColor(.white)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(.green)
                             Button("Select Collection") {
                                 showCollections = true
                             }
                             .buttonStyle(.bordered)
+                            .tint(.green)
                         }
                     }
                 }
@@ -136,18 +262,11 @@ struct ArchiveTabView: View {
             }
             
             // Collections button
-            Button {
+            RetroControlButton(systemName: "square.grid.2x2", action: {
                 showCollections = true
-            } label: {
-                Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 30))
-                    .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
+            }, isActive: true)
             .padding(.top, 50)
-            .padding(.trailing, 24)
+            .padding(.trailing, 16)
         }
         .sheet(isPresented: $showCollections) {
             ArchiveCollectionGalleryView(selectedCollection: $viewModel.selectedCollection)
