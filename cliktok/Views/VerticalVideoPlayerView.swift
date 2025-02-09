@@ -38,14 +38,16 @@ struct VerticalVideoPlayerView: View {
                 } else {
                     TabView(selection: $currentIndex) {
                         ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
-                            VideoPlayerView(video: video, 
-                                          showBackButton: showBackButton, 
-                                          clearSearchOnDismiss: $clearSearchOnDismiss,
-                                          isVisible: .constant(index == currentIndex))
-                                .environmentObject(feedViewModel)
-                                .frame(width: width, height: height)
-                                .rotationEffect(.degrees(-90))
-                                .tag(index)
+                            VideoPlayerView(
+                                video: video, 
+                                showBackButton: showBackButton, 
+                                clearSearchOnDismiss: $clearSearchOnDismiss,
+                                isVisible: .constant(index == currentIndex)
+                            )
+                            .environmentObject(feedViewModel)
+                            .frame(width: width, height: height)
+                            .rotationEffect(.degrees(-90))
+                            .tag(index)
                         }
                     }
                     .frame(width: height, height: width)
@@ -56,6 +58,27 @@ struct VerticalVideoPlayerView: View {
                     )
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea()
+                }
+            }
+            .onChange(of: currentIndex) { oldValue, newValue in
+                // Ensure old video is cleaned up
+                if oldValue < videos.count {
+                    let oldVideo = videos[oldValue]
+                    if let url = URL(string: oldVideo.videoURL) {
+                        Task {
+                            await VideoAssetLoader.shared.cleanupAsset(for: url)
+                        }
+                    }
+                }
+                
+                // Prefetch next video if available
+                if newValue + 1 < videos.count {
+                    let nextVideo = videos[newValue + 1]
+                    if let url = URL(string: nextVideo.videoURL) {
+                        Task {
+                            await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .medium)
+                        }
+                    }
                 }
             }
         }

@@ -14,11 +14,20 @@ struct VideoContentView: View {
         VideoPlayerView(
             video: video,
             showBackButton: false,
-            isVisible: .constant(index == currentIndex)
-        ) { _ in
-            onPrefetch()
-        }
+            isVisible: .constant(index == currentIndex),
+            onPrefetch: { _ in
+                onPrefetch()
+            }
+        )
         .environmentObject(viewModel)
+        .onDisappear {
+            // Ensure cleanup when view disappears
+            if let url = URL(string: video.videoURL) {
+                Task {
+                    await VideoAssetLoader.shared.cleanupAsset(for: url)
+                }
+            }
+        }
     }
 }
 
@@ -66,6 +75,16 @@ struct VideoFeedView: View {
                 }
             }
             .onChange(of: currentIndex) { oldValue, newValue in
+                // Pause old video and play new video
+                if oldValue < viewModel.videos.count {
+                    let oldVideo = viewModel.videos[oldValue]
+                    if let url = URL(string: oldVideo.videoURL) {
+                        Task {
+                            await VideoAssetLoader.shared.cleanupAsset(for: url)
+                        }
+                    }
+                }
+                
                 if newValue == viewModel.videos.count - 2 {
                     Task {
                         await viewModel.loadMoreVideos()
