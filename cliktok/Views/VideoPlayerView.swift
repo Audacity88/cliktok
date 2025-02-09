@@ -204,9 +204,21 @@ struct VideoPlayerView: View {
     let showBackButton: Bool
     @Binding var clearSearchOnDismiss: Bool
     @Binding var isVisible: Bool
+    
+    // Player states
     @State private var player: AVPlayer?
+    @State private var isPlaying = false
     @State private var isMuted = false
+    @State private var isLoadingVideo = false
+    @State private var currentTime: Double = 0
+    @State private var duration: Double = 0
+    @State private var isDraggingProgress = false
     @State private var showControls = true
+    @State private var controlsTimer: Timer?
+    @State private var showPlayButton = false
+    @State private var timeObserver: Any?
+    
+    // Creator and UI states
     @State private var showAddFundsAlert = false
     @State private var showError = false
     @State private var errorMessage = ""
@@ -215,10 +227,6 @@ struct VideoPlayerView: View {
     @State private var showTipBubble = false
     @State private var showTippedText = false
     @State private var showTipSheet = false
-    @State private var isLoadingVideo = false
-    @State private var isPlaying = true
-    @State private var showPlayButton = false
-    @State private var timeObserver: Any?
     @State private var showDeleteAlert = false
     @State private var showEditSheet = false
     @State private var creator: User?
@@ -254,17 +262,61 @@ struct VideoPlayerView: View {
                         .overlay(
                             Color.black.opacity(0.01)  // Nearly transparent overlay to catch taps
                                 .onTapGesture(count: 1) {
-                                    togglePlayPause()
+                                    withAnimation {
+                                        showControls.toggle()
+                                        resetControlsTimer()
+                                    }
                                 }
+                                .allowsHitTesting(duration <= 30) // Only allow tap gesture if no progress bar
                         )
                         .overlay(
                             Group {
-                                if showPlayButton {
-                                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                        .font(.system(size: 72))
-                                        .foregroundColor(.white.opacity(0.8))
-                                        .shadow(radius: 4)
-                                        .transition(.opacity)
+                                if duration > 30 && showControls {
+                                    VStack {
+                                        Spacer()
+                                        // Progress bar
+                                        ProgressBar(
+                                            value: $currentTime,
+                                            total: duration,
+                                            isDragging: $isDraggingProgress,
+                                            onChanged: { newValue in
+                                                currentTime = newValue
+                                                // Seek while dragging for immediate feedback
+                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                                                resetControlsTimer()
+                                            },
+                                            onEnded: { newValue in
+                                                currentTime = newValue
+                                                // Seek with exact timing when drag ends
+                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                                                    if finished && isPlaying {
+                                                        player.play()
+                                                    }
+                                                }
+                                                resetControlsTimer()
+                                            }
+                                        )
+                                        .frame(height: 20)
+                                        .padding(.horizontal)
+                                        .padding(.bottom, 200) // Fixed position above heart icon
+                                        .zIndex(1) // Ensure progress bar is above the tap overlay
+                                    }
+                                }
+                            }
+                        )
+                        .overlay(
+                            Group {
+                                if showControls {
+                                    Button(action: togglePlayPause) {
+                                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(width: 60, height: 60)
+                                            .foregroundColor(.white)
+                                            .opacity(0.8)
+                                    }
                                 }
                             }
                         )
@@ -610,44 +662,45 @@ struct VideoPlayerView: View {
         
         await MainActor.run {
             isLoadingVideo = true
+            duration = 0 // Reset duration
         }
         
         do {
             print("VideoPlayerView: Requesting asset from loader")
-            // Load asset using the caching loader
             let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
             
-            print("VideoPlayerView: Creating player item")
-            // Create AVPlayerItem with the loaded asset
-            let playerItem = AVPlayerItem(asset: asset)
+            // Load duration asynchronously before creating player item
+            let durationValue = try await asset.load(.duration)
+            let durationSeconds = CMTimeGetSeconds(durationValue)
             
-            // Configure for streaming
+            print("VideoPlayerView: Creating player item")
+            let playerItem = AVPlayerItem(asset: asset)
             playerItem.preferredForwardBufferDuration = 2
             playerItem.automaticallyPreservesTimeOffsetFromLive = false
             
             await MainActor.run {
                 print("VideoPlayerView: Setting up player on main thread")
-                // Clean up existing player and observers
                 cleanupPlayer()
                 
-                // Create new player with optimized settings
+                // Set duration first
+                if durationSeconds.isFinite {
+                    self.duration = durationSeconds
+                }
+                
                 let newPlayer = AVPlayer(playerItem: playerItem)
-                newPlayer.automaticallyWaitsToMinimizeStalling = false // Start playback immediately
+                newPlayer.automaticallyWaitsToMinimizeStalling = false
                 newPlayer.isMuted = isMuted
                 newPlayer.volume = 1.0
                 
-                // Set up periodic time observer
                 setupTimeObserver(for: newPlayer)
-                
-                // Set up player item observers
                 setupPlayerItemObservers(for: playerItem)
                 
-                // Assign the new player
                 self.player = newPlayer
                 
                 print("VideoPlayerView: Starting playback")
-                // Start playback
                 newPlayer.play()
+                isPlaying = true
+                showPlayButton = false
                 
                 print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
                 isLoadingVideo = false
@@ -678,14 +731,19 @@ struct VideoPlayerView: View {
         
         if let player = player, let timeObserver = timeObserver {
             player.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
         }
+        timeObserver = nil
+        
+        // Ensure player is muted before cleanup
+        player?.isMuted = true
         
         // Pause and nil the player
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
         isPlaying = false
+        isLoadingVideo = false  // Reset loading state
+        showPlayButton = false  // Reset play button state
     }
     
     private func toggleMute() {
@@ -698,29 +756,81 @@ struct VideoPlayerView: View {
     }
     
     private func togglePlayPause() {
+        print("Toggle play/pause called. Current state - isPlaying: \(isPlaying)")
         if isPlaying {
             player?.pause()
         } else {
             player?.play()
         }
+        isPlaying.toggle()
+        showPlayButton = !isPlaying
         
-        withAnimation {
-            isPlaying.toggle()
-            showPlayButton = true
-        }
-        
-        // Hide the play button after a delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            withAnimation {
-                showPlayButton = false
-            }
+        if isPlaying {
+            resetControlsTimer()
+        } else {
+            showControls = true
+            controlsTimer?.invalidate()
         }
     }
     
     private func setupTimeObserver(for player: AVPlayer) {
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] _ in
-            self.isPlaying = player?.timeControlStatus == .playing
+        // Remove existing observer if any
+        if let existing = timeObserver {
+            player.removeTimeObserver(existing)
+            timeObserver = nil
+        }
+        
+        // Get video duration if not already set
+        if duration == 0, let currentItem = player.currentItem {
+            let durationSeconds = currentItem.asset.duration.seconds
+            if durationSeconds.isFinite {
+                self.duration = durationSeconds
+            }
+        }
+        
+        // Create new time observer
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
+            guard let player = player else { return }
+            
+            // Update current time if not dragging
+            if !isDraggingProgress {
+                let seconds = CMTimeGetSeconds(time)
+                if seconds.isFinite {
+                    currentTime = seconds
+                }
+            }
+            
+            // Update playing state
+            let isCurrentlyPlaying = player.rate != 0
+            if isPlaying != isCurrentlyPlaying {
+                isPlaying = isCurrentlyPlaying
+                showPlayButton = !isCurrentlyPlaying
+            }
+            
+            // Hide controls after delay if video is playing
+            if isPlaying && showControls && !isDraggingProgress {
+                resetControlsTimer()
+            }
+        }
+    }
+    
+    private func resetControlsTimer() {
+        // Cancel existing timer
+        controlsTimer?.invalidate()
+        
+        // Show controls
+        withAnimation {
+            showControls = true
+        }
+        
+        // Set new timer to hide controls after 3 seconds
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            if isPlaying && !isDraggingProgress {
+                withAnimation {
+                    showControls = false
+                }
+            }
         }
     }
     
@@ -756,5 +866,56 @@ struct VideoPlayerView: View {
     }
 }
 
+// Progress Bar View
+struct ProgressBar: View {
+    @Binding var value: Double
+    let total: Double
+    @Binding var isDragging: Bool
+    let onChanged: (Double) -> Void
+    let onEnded: (Double) -> Void
+    
+    var body: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 20)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { gesture in
+                                let ratio = gesture.location.x / geometry.size.width
+                                let newValue = total * ratio
+                                isDragging = true
+                                onChanged(newValue)
+                            }
+                            .onEnded { gesture in
+                                let ratio = gesture.location.x / geometry.size.width
+                                let newValue = total * ratio
+                                onEnded(newValue)
+                                isDragging = false
+                            }
+                    )
+                    .overlay {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                // Progress track
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(width: geo.size.width * CGFloat(value / total), height: 20)
+                                
+                                // Handle
+                                Circle()
+                                    .fill(Color.white)
+                                    .frame(width: 20, height: 20)
+                                    .position(x: geo.size.width * CGFloat(value / total), y: geo.size.height / 2)
+                            }
+                        }
+                    }
+            }
+        }
+        .frame(height: 20)
+    }
+}
+
 #endif
-  
