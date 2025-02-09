@@ -1,5 +1,5 @@
 {
-  "originHash" : "d9639a6dd4596aadac6a6160df7c6a70be44ca6e8df742672b9273910d7fc6f2",
+  "originHash" : "c63c63846d9c539229e96de38d6af51417e28c0ee9a0bc48bd0f0f19d923c329",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "194a6706acbd25e4ef639bcaddea16e8758a3e27",
         "version" : "1.2024011602.0"
-      }
-    },
-    {
-      "identity" : "alamofire",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Alamofire/Alamofire.git",
-      "state" : {
-        "revision" : "513364f870f6bfc468f9d2ff0a95caccc10044c5",
-        "version" : "5.10.2"
       }
     },
     {
@@ -116,15 +107,6 @@
       "state" : {
         "revision" : "540318ecedd63d883069ae7f1ed811a2df00b6ac",
         "version" : "2.4.0"
-      }
-    },
-    {
-      "identity" : "stripe-ios-spm",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/stripe/stripe-ios-spm",
-      "state" : {
-        "revision" : "5e23f5397cd26da696698870f3dc0ee7823b5dec",
-        "version" : "24.4.1"
       }
     },
     {

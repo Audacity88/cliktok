@@ -9,10 +9,8 @@
 /* Begin PBXBuildFile section */
 		372CDB8C2D531596006F7CDB /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 372CDB8B2D531596006F7CDB /* FirebaseFirestore */; };
 		372CDB8E2D531596006F7CDB /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 372CDB8D2D531596006F7CDB /* FirebaseStorage */; };
-		37A390432D5414240023EAF1 /* Alamofire in Frameworks */ = {isa = PBXBuildFile; productRef = 37A390422D5414240023EAF1 /* Alamofire */; };
 		37A531CB2D53044C00633396 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 37A531CA2D53044C00633396 /* FirebaseAuth */; };
 		37A531CD2D53044C00633396 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 37A531CC2D53044C00633396 /* FirebaseCore */; };
-		37CD080F2D5571C400B0CCD3 /* StripePaymentSheet in Frameworks */ = {isa = PBXBuildFile; productRef = 37CD080E2D5571C400B0CCD3 /* StripePaymentSheet */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -47,9 +45,7 @@
 			files = (
 				37A531CD2D53044C00633396 /* FirebaseCore in Frameworks */,
 				372CDB8E2D531596006F7CDB /* FirebaseStorage in Frameworks */,
-				37A390432D5414240023EAF1 /* Alamofire in Frameworks */,
 				37A531CB2D53044C00633396 /* FirebaseAuth in Frameworks */,
-				37CD080F2D5571C400B0CCD3 /* StripePaymentSheet in Frameworks */,
 				372CDB8C2D531596006F7CDB /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -97,8 +93,6 @@
 				37A531CC2D53044C00633396 /* FirebaseCore */,
 				372CDB8B2D531596006F7CDB /* FirebaseFirestore */,
 				372CDB8D2D531596006F7CDB /* FirebaseStorage */,
-				37A390422D5414240023EAF1 /* Alamofire */,
-				37CD080E2D5571C400B0CCD3 /* StripePaymentSheet */,
 			);
 			productName = cliktok;
 			productReference = 37E27EB82D53030100FDBE70 /* cliktok.app */;
@@ -130,8 +124,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
-				37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */,
-				37CD080D2D5571C400B0CCD3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 37E27EB92D53030100FDBE70 /* Products */;
@@ -373,28 +365,12 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Alamofire/Alamofire.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 5.10.2;
-			};
-		};
 		37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 11.8.1;
-			};
-		};
-		37CD080D2D5571C400B0CCD3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/stripe/stripe-ios-spm";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 24.4.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -410,11 +386,6 @@
 			package = 37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
 		};
-		37A390422D5414240023EAF1 /* Alamofire */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 37A390412D5414240023EAF1 /* XCRemoteSwiftPackageReference "Alamofire" */;
-			productName = Alamofire;
-		};
 		37A531CA2D53044C00633396 /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
@@ -424,11 +395,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 37A531C92D53044C00633396 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseCore;
-		};
-		37CD080E2D5571C400B0CCD3 /* StripePaymentSheet */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 37CD080D2D5571C400B0CCD3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */;
-			productName = StripePaymentSheet;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

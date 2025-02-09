@@ -1,5 +1,4 @@
 import SwiftUI
-import StripePayments
 
 // Tip History Row Component
 struct TipHistoryRow: View {
