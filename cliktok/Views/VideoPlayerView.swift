@@ -663,6 +663,9 @@ struct VideoPlayerView: View {
         await MainActor.run {
             isLoadingVideo = true
             duration = 0 // Reset duration
+            
+            // Stop any existing playback before loading new video
+            cleanupPlayer()
         }
         
         do {
@@ -680,7 +683,6 @@ struct VideoPlayerView: View {
             
             await MainActor.run {
                 print("VideoPlayerView: Setting up player on main thread")
-                cleanupPlayer()
                 
                 // Set duration first
                 if durationSeconds.isFinite {
@@ -716,34 +718,34 @@ struct VideoPlayerView: View {
     }
     
     private func cleanupPlayer() {
-        print("Cleaning up player")
-        
-        // Remove observers if they exist
-        if let loopObserver = loopObserver {
-            NotificationCenter.default.removeObserver(loopObserver)
-            self.loopObserver = nil
+        print("VideoPlayerView: Cleaning up player")
+        if let currentPlayer = player {
+            currentPlayer.pause()
+            currentPlayer.replaceCurrentItem(with: nil)
+            
+            // Remove observers
+            if let observer = timeObserver {
+                currentPlayer.removeTimeObserver(observer)
+                timeObserver = nil
+            }
+            
+            // Remove KVO observers
+            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: currentPlayer.currentItem)
         }
         
-        if let errorObserver = errorObserver {
-            NotificationCenter.default.removeObserver(errorObserver)
-            self.errorObserver = nil
-        }
-        
-        if let player = player, let timeObserver = timeObserver {
-            player.removeTimeObserver(timeObserver)
-        }
-        timeObserver = nil
-        
-        // Ensure player is muted before cleanup
-        player?.isMuted = true
-        
-        // Pause and nil the player
-        player?.pause()
-        player?.replaceCurrentItem(with: nil)
+        // Clear player and reset state
         player = nil
         isPlaying = false
-        isLoadingVideo = false  // Reset loading state
-        showPlayButton = false  // Reset play button state
+        isLoadingVideo = false
+        currentTime = 0
+        duration = 0
+        
+        // Clean up asset loader cache for this video
+        if let url = URL(string: video.videoURL) {
+            Task {
+                await VideoAssetLoader.shared.cleanupAsset(for: url)
+            }
+        }
     }
     
     private func toggleMute() {
