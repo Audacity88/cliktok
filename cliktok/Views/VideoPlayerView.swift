@@ -658,33 +658,20 @@ struct VideoPlayerView: View {
                     await tipViewModel.loadTipHistory()
                 }
             }
-            .onChange(of: isVisible) { oldValue, newValue in
+            .onChange(of: isVisible) { newValue in
                 if newValue {
                     // Update view count and play when becoming visible
                     Task {
                         print("Video becoming visible: \(video.id)")
                         await feedViewModel.updateVideoStats(video: video)
-                        // Only start playing if we're not already playing
-                        if player?.rate == 0 {
-                            player?.play()
-                            isPlaying = true
-                        }
+                        player?.play()
                     }
                 } else {
                     print("Video becoming hidden: \(video.id)")
-                    // Always pause when becoming invisible
                     player?.pause()
-                    isPlaying = false
-                    // Clean up resources if needed
-                    if let url = URL(string: video.videoURL) {
-                        Task {
-                            await VideoAssetLoader.shared.cleanupAsset(for: url)
-                        }
-                    }
                 }
             }
             .onDisappear {
-                print("VideoPlayerView disappearing for video: \(video.id)")
                 cleanupPlayer()
             }
             .onChange(of: showEditSheet) { oldValue, newValue in
@@ -693,15 +680,13 @@ struct VideoPlayerView: View {
                     player?.pause()
                     isPlaying = false
                 } else {
-                    // Only resume playing if we're visible
-                    if isVisible {
-                        player?.play()
-                        isPlaying = true
-                        
-                        // Refresh the video data
-                        Task {
-                            await feedViewModel.loadInitialVideos()
-                        }
+                    // Resume playing from current position when edit sheet is dismissed
+                    player?.play()
+                    isPlaying = true
+                    
+                    // Refresh the video data
+                    Task {
+                        await feedViewModel.loadInitialVideos()
                     }
                 }
             }
