@@ -183,17 +183,135 @@ class VideoFeedViewModel: ObservableObject {
     
     func searchVideos(hashtag: String) async {
         do {
-            let snapshot = try await db.collection("videos")
-                .whereField("hashtags", arrayContains: hashtag)
-                .limit(to: 50)
+            // Search in uploaded videos
+            let uploadedSnapshot = try await db.collection("videos")
+                .whereField("hashtags", arrayContains: hashtag.lowercased())
+                .limit(to: 25)
                 .getDocuments()
             
-            searchResults = snapshot.documents.compactMap { document in
+            let uploadedVideos = uploadedSnapshot.documents.compactMap { document in
                 try? document.data(as: Video.self)
             }
             
-            // Fetch creators for these videos
-            await fetchCreators(for: searchResults)
+            // Search in archive videos
+            let archiveResults = await searchArchiveVideos(query: hashtag)
+            
+            // Combine results
+            searchResults = uploadedVideos + archiveResults
+            
+            // Fetch creators for uploaded videos
+            await fetchCreators(for: uploadedVideos)
+            
+            // Add archive user for archive videos
+            if !archiveResults.isEmpty {
+                videoCreators["archive_user"] = archiveUser
+            }
+            
+        } catch {
+            searchError = error
+            print("Error searching videos: \(error)")
+        }
+    }
+    
+    private func searchArchiveVideos(query: String) async -> [Video] {
+        do {
+            let searchURL = URL(string: "\(InternetArchiveAPI.baseURL)/advancedsearch.php")!
+            var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
+            
+            // Build a more targeted search query
+            let searchQuery = """
+            (title:"\(query)" OR description:"\(query)") AND \
+            (mediatype:movies OR mediatype:movingimage) AND \
+            -collection:test_videos AND \
+            (format:mp4 OR format:h.264 OR format:512kb)
+            """
+            
+            let queryItems = [
+                URLQueryItem(name: "q", value: searchQuery),
+                URLQueryItem(name: "fl[]", value: "identifier,title,description,downloads"),
+                URLQueryItem(name: "output", value: "json"),
+                URLQueryItem(name: "rows", value: "25"),
+                URLQueryItem(name: "sort[]", value: "-downloads"),
+                URLQueryItem(name: "sort[]", value: "-week")
+            ]
+            
+            components.queryItems = queryItems
+            print("Archive search URL: \(components.url?.absoluteString ?? "")")
+            
+            let (data, _) = try await URLSession.shared.data(from: components.url!)
+            let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
+            
+            print("Found \(searchResponse.response.docs.count) archive results")
+            
+            return searchResponse.response.docs.compactMap { doc in
+                // Get the thumbnail URL
+                let thumbnailURL = InternetArchiveAPI.getThumbnailURL(identifier: doc.identifier).absoluteString
+                
+                // Try different video formats in order of preference
+                let possibleFilenames = [
+                    "\(doc.identifier)_512kb.mp4",
+                    "\(doc.identifier).mp4",
+                    "\(doc.identifier)_h264.mp4"
+                ]
+                
+                let videoURL = possibleFilenames
+                    .map { InternetArchiveAPI.getVideoURL(identifier: doc.identifier, filename: $0) }
+                    .first?
+                    .absoluteString ?? ""
+                
+                guard !videoURL.isEmpty else {
+                    print("No valid video URL found for \(doc.identifier)")
+                    return nil
+                }
+                
+                print("Created archive video: \(doc.title ?? "Untitled") with URL: \(videoURL)")
+                
+                return Video(
+                    id: doc.identifier,
+                    userID: "archive_user",
+                    videoURL: videoURL,
+                    thumbnailURL: thumbnailURL,
+                    caption: doc.title ?? "Untitled",
+                    description: doc.description,
+                    hashtags: ["archive"],
+                    createdAt: Date(),
+                    likes: 0,
+                    views: 0
+                )
+            }
+            
+        } catch {
+            print("Error searching archive videos: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
+    func searchByText(_ searchText: String) async {
+        do {
+            // Search in uploaded videos
+            let uploadedSnapshot = try await db.collection("videos")
+                .whereField("caption", isGreaterThanOrEqualTo: searchText)
+                .whereField("caption", isLessThan: searchText + "\u{f8ff}")
+                .limit(to: 25)
+                .getDocuments()
+            
+            let uploadedVideos = uploadedSnapshot.documents.compactMap { document in
+                try? document.data(as: Video.self)
+            }
+            
+            // Search in archive videos
+            let archiveResults = await searchArchiveVideos(query: searchText)
+            
+            // Combine results
+            searchResults = uploadedVideos + archiveResults
+            
+            // Fetch creators for uploaded videos
+            await fetchCreators(for: uploadedVideos)
+            
+            // Add archive user for archive videos
+            if !archiveResults.isEmpty {
+                videoCreators["archive_user"] = archiveUser
+            }
             
         } catch {
             searchError = error
