@@ -10,10 +10,30 @@ class VideoFeedViewModel: ObservableObject {
     @Published var videoCreators: [String: User] = [:]
     @Published var searchResults: [Video] = []
     @Published var searchError: Error?
+    @Published var hasMoreVideos = true
     
     private var lastDocument: DocumentSnapshot?
     private let pageSize = 5
     private let db = Firestore.firestore()
+    
+    // Archive user for Internet Archive videos
+    private let archiveUser = User(
+        id: "archive_user",
+        email: "archive@archive.org",
+        username: "internetarchive",
+        displayName: "Internet Archive",
+        bio: "A digital library of Internet sites and other cultural artifacts in digital form.",
+        profileImageURL: nil,
+        isPrivateAccount: false,
+        balance: 0.0,
+        userRole: .regular,
+        companyName: "Internet Archive"
+    )
+    
+    init() {
+        // Add archive user to creators
+        videoCreators["archive_user"] = archiveUser
+    }
     
     func loadInitialVideos() async {
         isLoading = true

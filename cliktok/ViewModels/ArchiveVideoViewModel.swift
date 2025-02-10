@@ -74,6 +74,9 @@ class ArchiveVideoViewModel: ObservableObject {
         error = nil
         hasMoreVideos = true  // Reset this flag when loading a new collection
         
+        // Clear loaded ranges for this collection
+        loadedRanges[collection.id] = Set<Range<Int>>()
+        
         // Clear any existing videos for this collection
         if let index = collections.firstIndex(where: { $0.id == collection.id }) {
             var updatedCollection = collection
@@ -112,7 +115,10 @@ class ArchiveVideoViewModel: ObservableObject {
         
         // Check if range is already loaded
         let range = startIndex..<(startIndex + pageSize)
-        if loadedRanges[collection.id]?.contains(where: { $0.overlaps(range) }) ?? false {
+        let loadedRangesForCollection = loadedRanges[collection.id] ?? Set<Range<Int>>()
+        
+        // Only check for exact range match, not overlapping
+        if loadedRangesForCollection.contains(range) {
             print("ArchiveVideoViewModel: Range \(range) already loaded")
             return
         }
