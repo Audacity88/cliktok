@@ -203,21 +203,19 @@ struct VideoControlsOverlay: View {
     let togglePlayPause: () -> Void
     
     var body: some View {
-        Button(action: togglePlayPause) {
+        Button(action: {
+            print("Play/Pause button tapped - isPlaying before tap: \(isPlaying)")
+            togglePlayPause()
+        }) {
             Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 60, height: 60)
+                .frame(width: 70, height: 70)  // Slightly larger touch target
                 .foregroundColor(.white)
-                .contentShape(Rectangle()) // Make entire frame tappable
-                .background(
-                    Color.black.opacity(0.01)
-                        .frame(width: 100, height: 100)
-                        .contentShape(Rectangle())
-                )
+                .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle()) // Prevent default button styling
-        .opacity(showControls ? 0.8 : 0)
+        .buttonStyle(PlainButtonStyle())
+        .opacity(showControls ? 0.9 : 0)
         .animation(.easeInOut(duration: 0.2), value: showControls)
     }
 }
@@ -408,23 +406,6 @@ struct VideoControlButtons: View {
     }
 }
 
-// Helper function to clean HTML tags
-private func cleanHTMLTags(_ text: String) -> String {
-    // Remove HTML tags using regular expressions
-    let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: .caseInsensitive)
-    let range = NSRange(location: 0, length: text.utf16.count)
-    let cleanedText = regex?.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
-    
-    // Decode HTML entities and return cleaned text
-    return cleanedText?
-        .replacingOccurrences(of: "&amp;", with: "&")
-        .replacingOccurrences(of: "&lt;", with: "<")
-        .replacingOccurrences(of: "&gt;", with: ">")
-        .replacingOccurrences(of: "&quot;", with: "\"")
-        .replacingOccurrences(of: "&#39;", with: "'")
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? text
-}
-
 // Video Info Section
 struct VideoInfoSection: View {
     let video: Video
@@ -471,32 +452,281 @@ struct VideoInfoSection: View {
     }
 }
 
+// Add this before the VideoPlayerView struct
+class VideoPlayerViewModel: NSObject, ObservableObject {
+    @Published var player: AVPlayer?
+    @Published var isPlaying = false
+    @Published var isMuted = false
+    @Published var isLoadingVideo = false
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 0
+    @Published var showPlayButton = false
+    @Published var errorMessage = ""
+    @Published var showError = false
+    
+    private var timeObserverToken: Any?
+    private var observedPlayer: AVPlayer?
+    private var videoURL: String?
+    private var isVisible: Bool = false
+    
+    func setVideo(url: String, isVisible: Bool) {
+        self.videoURL = url
+        self.isVisible = isVisible
+    }
+    
+    func loadAndPlayVideo() async {
+        guard let urlString = videoURL,
+              let url = URL(string: urlString) else {
+            print("VideoPlayerView: Invalid URL for video")
+            return
+        }
+        
+        print("VideoPlayerView: Starting to load video from URL: \(url)")
+        let startTime = Date()
+        
+        await MainActor.run {
+            isLoadingVideo = true
+            duration = 0 // Reset duration
+            
+            // Stop any existing playback before loading new video
+            cleanupPlayer()
+        }
+        
+        do {
+            print("VideoPlayerView: Requesting asset from loader")
+            let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
+            
+            // Load duration asynchronously before creating player item
+            let durationValue = try await asset.load(.duration)
+            let durationSeconds = CMTimeGetSeconds(durationValue)
+            
+            print("VideoPlayerView: Creating player item")
+            let playerItem = AVPlayerItem(asset: asset)
+            playerItem.preferredForwardBufferDuration = 2
+            playerItem.automaticallyPreservesTimeOffsetFromLive = false
+            
+            // Add error handling for playback issues
+            playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
+            
+            await MainActor.run {
+                print("VideoPlayerView: Setting up player on main thread")
+                
+                // Set duration first
+                if durationSeconds.isFinite {
+                    self.duration = durationSeconds
+                }
+                
+                let newPlayer = AVPlayer(playerItem: playerItem)
+                newPlayer.automaticallyWaitsToMinimizeStalling = false
+                newPlayer.isMuted = isMuted
+                newPlayer.volume = 1.0
+                
+                setupTimeObserver(for: newPlayer)
+                
+                self.player = newPlayer
+                
+                // Only start playing if this video is visible
+                if isVisible {
+                    print("VideoPlayerView: Starting playback (video is visible)")
+                    newPlayer.play()
+                    isPlaying = true
+                    showPlayButton = false
+                } else {
+                    print("VideoPlayerView: Video loaded but not playing (video is not visible)")
+                    isPlaying = false
+                    showPlayButton = true
+                }
+                
+                print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
+                isLoadingVideo = false
+            }
+        } catch {
+            print("VideoPlayerView: Error loading video: \(error.localizedDescription)")
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.showError = true
+                isLoadingVideo = false
+            }
+        }
+    }
+    
+    override public func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if keyPath == #keyPath(AVPlayerItem.status) {
+            let status: AVPlayerItem.Status
+            if let statusNumber = change?[.newKey] as? NSNumber {
+                status = AVPlayerItem.Status(rawValue: statusNumber.intValue)!
+            } else {
+                status = .unknown
+            }
+            
+            switch status {
+            case .failed:
+                if let playerItem = object as? AVPlayerItem,
+                   let error = playerItem.error as NSError? {
+                    print("VideoPlayerView: Playback failed with error: \(error.localizedDescription)")
+                    
+                    // Handle invalid sample cursor error
+                    if error.domain == AVFoundationErrorDomain && 
+                       (error.localizedDescription.contains("Invalid sample cursor") ||
+                        error.localizedDescription.contains("sample reading")) {
+                        
+                        Task { @MainActor in
+                            // Clean up the current player
+                            cleanupPlayer()
+                            
+                            // Clear asset cache for this URL
+                            if let urlString = videoURL,
+                               let url = URL(string: urlString) {
+                                await VideoAssetLoader.shared.cleanupAsset(for: url)
+                            }
+                            
+                            // Try to reload the video after a short delay
+                            try? await Task.sleep(nanoseconds: 1 * NSEC_PER_SEC)
+                            await loadAndPlayVideo()
+                        }
+                    } else {
+                        Task { @MainActor in
+                            errorMessage = error.localizedDescription
+                            showError = true
+                        }
+                    }
+                }
+            case .readyToPlay:
+                print("VideoPlayerView: Player item is ready to play")
+            case .unknown:
+                print("VideoPlayerView: Player item status is unknown")
+            @unknown default:
+                print("VideoPlayerView: Player item has unhandled status")
+            }
+        }
+    }
+    
+    func cleanupPlayer() {
+        print("VideoPlayerView: Cleaning up player")
+        if let currentPlayer = player {
+            currentPlayer.pause()
+            
+            // Remove KVO observer from player item
+            if let playerItem = currentPlayer.currentItem {
+                playerItem.removeObserver(self, forKeyPath: #keyPath(AVPlayerItem.status))
+            }
+            
+            // Only remove the time observer if it was added to this player instance
+            if currentPlayer === observedPlayer, let token = timeObserverToken {
+                print("VideoPlayerView: Removing time observer")
+                currentPlayer.removeTimeObserver(token)
+                timeObserverToken = nil
+                observedPlayer = nil
+            }
+            
+            currentPlayer.replaceCurrentItem(with: nil)
+        }
+        
+        // Clear player and reset state
+        player = nil
+        isPlaying = false
+        isLoadingVideo = false
+        currentTime = 0
+        duration = 0
+        
+        // Clean up asset loader cache for this video
+        if let urlString = videoURL,
+           let url = URL(string: urlString) {
+            Task {
+                await VideoAssetLoader.shared.cleanupAsset(for: url)
+            }
+        }
+    }
+    
+    private func setupTimeObserver(for player: AVPlayer) {
+        // Remove existing observer if any
+        if let existingPlayer = observedPlayer, let token = timeObserverToken {
+            print("VideoPlayerView: Removing existing time observer")
+            existingPlayer.removeTimeObserver(token)
+            timeObserverToken = nil
+            observedPlayer = nil
+        }
+        
+        // Create new time observer
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        let token = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            guard let self = self else { return }
+            
+            // Update current time
+            let seconds = CMTimeGetSeconds(time)
+            if seconds.isFinite {
+                self.currentTime = seconds
+            }
+            
+            // Update playing state
+            let isCurrentlyPlaying = player.rate != 0
+            if self.isPlaying != isCurrentlyPlaying {
+                print("Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying)")
+                self.isPlaying = isCurrentlyPlaying
+                self.showPlayButton = !isCurrentlyPlaying
+            }
+        }
+        
+        // Store the token and player reference
+        timeObserverToken = token
+        observedPlayer = player
+        print("VideoPlayerView: Added new time observer")
+    }
+    
+    func togglePlayPause() {
+        if isPlaying {
+            player?.pause()
+            print("Video PAUSED")
+        } else {
+            player?.play()
+            print("Video PLAYING")
+        }
+        isPlaying.toggle()
+        showPlayButton = !isPlaying
+    }
+    
+    func toggleMute() {
+        isMuted.toggle()
+        player?.isMuted = isMuted
+        if !isMuted {
+            player?.volume = 1.0
+        }
+    }
+    
+    func updateVisibility(_ isVisible: Bool) {
+        self.isVisible = isVisible
+        if isVisible {
+            player?.play()
+            isPlaying = true
+            showPlayButton = false
+        } else {
+            player?.pause()
+            isPlaying = false
+            showPlayButton = true
+        }
+    }
+    
+    func seekTo(time: Double) {
+        let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
+        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+}
+
 struct VideoPlayerView: View {
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     @StateObject private var tipViewModel = TipViewModel.shared
+    @StateObject private var playerViewModel = VideoPlayerViewModel()
     @Environment(\.dismiss) private var dismiss
     let video: Video
     let showBackButton: Bool
     @Binding var clearSearchOnDismiss: Bool
     @Binding var isVisible: Bool
     
-    // Player states
-    @State private var player: AVPlayer?
-    @State private var isPlaying = false
-    @State private var isMuted = false
-    @State private var isLoadingVideo = false
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 0
+    // UI states
     @State private var isDraggingProgress = false
     @State private var showControls = true
     @State private var controlsTimer: Timer?
-    @State private var showPlayButton = false
-    @State private var timeObserver: Any?
-    
-    // Creator and UI states
     @State private var showAddFundsAlert = false
-    @State private var showError = false
-    @State private var errorMessage = ""
     @State private var showWallet = false
     @State private var totalTips = 0
     @State private var showTipBubble = false
@@ -505,11 +735,11 @@ struct VideoPlayerView: View {
     @State private var showDeleteAlert = false
     @State private var showEditSheet = false
     @State private var creator: User?
-    @State private var loopObserver: NSObjectProtocol?
-    @State private var errorObserver: NSObjectProtocol?
-    let onPrefetch: (([Video]) -> Void)?
     @State private var lastControlReset = Date()
     @State private var isResettingControls = false
+    @State private var showError = false
+    
+    let onPrefetch: (([Video]) -> Void)?
     
     init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, onPrefetch: (([Video]) -> Void)? = nil) {
         self.video = video
@@ -536,67 +766,81 @@ struct VideoPlayerView: View {
                 Color.black.edgesIgnoringSafeArea(.all)
                 
                 // Video player and controls
-                if let player = player {
-                    VideoPlayer(player: player)
-                        .edgesIgnoringSafeArea(.all)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .overlay {
-                            ZStack {
-                                // Full-screen tap gesture area
-                                Color.black.opacity(0.01)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        withAnimation {
-                                            showControls.toggle()
-                                            print("Controls TOGGLED by tap - new state: \(showControls)")
-                                            if showControls {
-                                                resetControlsTimer()
-                                            } else {
-                                                controlsTimer?.invalidate()
+                Group {
+                    if let player = playerViewModel.player {
+                        VideoPlayer(player: player)
+                            .edgesIgnoringSafeArea(.all)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .overlay {
+                                ZStack {
+                                    // Full-screen tap gesture area
+                                    Color.black.opacity(0.01)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            print("DEBUG: ====== Background Tap Event ======")
+                                            print("DEBUG: Location: Full screen background")
+                                            print("DEBUG: Current States:")
+                                            print("DEBUG: - showControls: \(showControls)")
+                                            print("DEBUG: - showPlayButton: \(playerViewModel.showPlayButton)")
+                                            print("DEBUG: - isPlaying: \(playerViewModel.isPlaying)")
+                                            print("DEBUG: - controlsTimer active: \(controlsTimer != nil)")
+                                            
+                                            withAnimation {
+                                                showControls.toggle()
+                                                print("DEBUG: Controls toggled to: \(showControls)")
+                                                
+                                                if showControls {
+                                                    print("DEBUG: Starting controls auto-hide timer")
+                                                    resetControlsTimer()
+                                                } else {
+                                                    print("DEBUG: Invalidating controls timer")
+                                                    controlsTimer?.invalidate()
+                                                }
                                             }
+                                            print("DEBUG: ================================")
                                         }
-                                    }
-                                    .allowsHitTesting(true)
+                                        .allowsHitTesting(!playerViewModel.showPlayButton)  // Only allow background taps when play button is hidden
 
-                                // Controls layer
-                                VStack {
-                                    Spacer()
-                                    
-                                    // Center container for play/pause button
-                                    ZStack {
-                                        // Play/Pause button
-                                        VideoControlsOverlay(
+                                    // Controls layer
+                                    VStack {
+                                        Spacer()
+                                        
+                                        // Center container for play/pause button
+                                        ZStack {
+                                            // Play/Pause button
+                                            VideoControlsOverlay(
+                                                showControls: showControls || playerViewModel.showPlayButton,
+                                                isPlaying: playerViewModel.isPlaying,
+                                                togglePlayPause: playerViewModel.togglePlayPause
+                                            )
+                                            .allowsHitTesting(true)
+                                            .zIndex(100) // Ensure button is on top of all layers
+                                        }
+                                        .frame(maxWidth: .infinity, maxHeight: 100)  // Fixed height for better touch target
+                                        .contentShape(Rectangle())
+                                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                        
+                                        Spacer()
+                                        
+                                        // Progress bar
+                                        VideoProgressOverlay(
+                                            duration: playerViewModel.duration,
                                             showControls: showControls,
-                                            isPlaying: isPlaying,
-                                            togglePlayPause: togglePlayPause
+                                            currentTime: $playerViewModel.currentTime,
+                                            isDraggingProgress: $isDraggingProgress,
+                                            isPlaying: playerViewModel.isPlaying,
+                                            player: player,
+                                            resetControlsTimer: resetControlsTimer
                                         )
                                         .allowsHitTesting(true)
-                                        .zIndex(100) // Ensure button is on top of all layers
                                     }
-                                    .frame(maxWidth: .infinity)
-                                    .contentShape(Rectangle())
-                                    .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
-                                    
-                                    Spacer()
-                                    
-                                    // Progress bar
-                                    VideoProgressOverlay(
-                                        duration: duration,
-                                        showControls: showControls,
-                                        currentTime: $currentTime,
-                                        isDraggingProgress: $isDraggingProgress,
-                                        isPlaying: isPlaying,
-                                        player: player,
-                                        resetControlsTimer: resetControlsTimer
-                                    )
-                                    .allowsHitTesting(true)
                                 }
                             }
-                        }
-                } else if isLoadingVideo {
-                    ProgressView()
-                        .tint(.white)
+                    } else if playerViewModel.isLoadingVideo {
+                        ProgressView()
+                            .tint(.white)
+                    }
                 }
                 
                 // Content overlay
@@ -604,7 +848,7 @@ struct VideoPlayerView: View {
                     if showBackButton {
                         HStack {
                             Button(action: {
-                                cleanupPlayer()
+                                playerViewModel.cleanupPlayer()
                                 clearSearchOnDismiss = true
                                 dismiss()
                             }) {
@@ -643,13 +887,13 @@ struct VideoPlayerView: View {
                             geometry: geometry,
                             totalTips: totalTips,
                             tipViewModel: tipViewModel,
-                            isMuted: isMuted,
+                            isMuted: playerViewModel.isMuted,
                             showTipBubble: $showTipBubble,
                             showTippedText: $showTippedText,
                             showAddFundsAlert: $showAddFundsAlert,
                             showError: $showError,
-                            errorMessage: $errorMessage,
-                            toggleMute: toggleMute
+                            errorMessage: $playerViewModel.errorMessage,
+                            toggleMute: playerViewModel.toggleMute
                         )
                     }
                 }
@@ -662,9 +906,9 @@ struct VideoPlayerView: View {
             .edgesIgnoringSafeArea(.all)
             .onAppear {
                 print("VideoPlayerView appeared for video: \(video.id)")
+                playerViewModel.setVideo(url: video.videoURL, isVisible: isVisible)
                 Task {
-                    // Load video without autoplaying
-                    await loadAndPlayVideo()
+                    await playerViewModel.loadAndPlayVideo()
                     
                     // Load creator profile and tip data
                     if creator == nil {
@@ -677,29 +921,24 @@ struct VideoPlayerView: View {
             }
             .onChange(of: isVisible) { newValue in
                 if newValue {
-                    // Update view count and play when becoming visible
                     Task {
-                        print("Video becoming visible: \(video.id)")
                         await feedViewModel.updateVideoStats(video: video)
-                        player?.play()
                     }
-                } else {
-                    print("Video becoming hidden: \(video.id)")
-                    player?.pause()
                 }
+                playerViewModel.updateVisibility(newValue)
             }
             .onDisappear {
-                cleanupPlayer()
+                playerViewModel.cleanupPlayer()
             }
             .onChange(of: showEditSheet) { oldValue, newValue in
                 if newValue {
                     // Just pause the video when edit sheet is shown
-                    player?.pause()
-                    isPlaying = false
+                    playerViewModel.player?.pause()
+                    playerViewModel.isPlaying = false
                 } else {
                     // Resume playing from current position when edit sheet is dismissed
-                    player?.play()
-                    isPlaying = true
+                    playerViewModel.player?.play()
+                    playerViewModel.isPlaying = true
                     
                     // Refresh the video data
                     Task {
@@ -722,18 +961,18 @@ struct VideoPlayerView: View {
             .alert("Error", isPresented: $showError) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text(errorMessage)
+                Text(playerViewModel.errorMessage)
             }
             .alert("Delete Video", isPresented: $showDeleteAlert) {
                 Button("Delete", role: .destructive) {
                     Task {
                         do {
                             try await feedViewModel.deleteVideo(video)
-                            cleanupPlayer()
+                            playerViewModel.cleanupPlayer()
                             dismiss()
                         } catch {
-                            errorMessage = error.localizedDescription
-                            showError = true
+                            playerViewModel.errorMessage = error.localizedDescription
+                            playerViewModel.showError = true
                         }
                     }
                 }
@@ -743,182 +982,6 @@ struct VideoPlayerView: View {
             }
             .sheet(isPresented: $showWallet) {
                 WalletView()
-            }
-        }
-    }
-    
-    private func loadAndPlayVideo() async {
-        guard let url = URL(string: video.videoURL) else {
-            print("VideoPlayerView: Invalid URL for video: \(video.id)")
-            return
-        }
-        
-        print("VideoPlayerView: Starting to load video from URL: \(url)")
-        let startTime = Date()
-        
-        await MainActor.run {
-            isLoadingVideo = true
-            duration = 0 // Reset duration
-            
-            // Stop any existing playback before loading new video
-            cleanupPlayer()
-        }
-        
-        do {
-            print("VideoPlayerView: Requesting asset from loader")
-            let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
-            
-            // Load duration asynchronously before creating player item
-            let durationValue = try await asset.load(.duration)
-            let durationSeconds = CMTimeGetSeconds(durationValue)
-            
-            print("VideoPlayerView: Creating player item")
-            let playerItem = AVPlayerItem(asset: asset)
-            playerItem.preferredForwardBufferDuration = 2
-            playerItem.automaticallyPreservesTimeOffsetFromLive = false
-            
-            await MainActor.run {
-                print("VideoPlayerView: Setting up player on main thread")
-                
-                // Set duration first
-                if durationSeconds.isFinite {
-                    self.duration = durationSeconds
-                }
-                
-                let newPlayer = AVPlayer(playerItem: playerItem)
-                newPlayer.automaticallyWaitsToMinimizeStalling = false
-                newPlayer.isMuted = isMuted
-                newPlayer.volume = 1.0
-                
-                setupTimeObserver(for: newPlayer)
-                setupPlayerItemObservers(for: playerItem)
-                
-                self.player = newPlayer
-                
-                print("VideoPlayerView: Starting playback")
-                newPlayer.play()
-                isPlaying = true
-                showPlayButton = false
-                
-                print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
-                isLoadingVideo = false
-            }
-        } catch {
-            print("VideoPlayerView: Error loading video: \(error.localizedDescription)")
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-                self.showError = true
-                isLoadingVideo = false
-            }
-        }
-    }
-    
-    private func cleanupPlayer() {
-        print("VideoPlayerView: Cleaning up player")
-        if let currentPlayer = player {
-            currentPlayer.pause()
-            currentPlayer.replaceCurrentItem(with: nil)
-            
-            // Remove observers
-            if let observer = timeObserver {
-                currentPlayer.removeTimeObserver(observer)
-                timeObserver = nil
-            }
-            
-            // Remove KVO observers
-            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: currentPlayer.currentItem)
-        }
-        
-        // Clear player and reset state
-        player = nil
-        isPlaying = false
-        isLoadingVideo = false
-        currentTime = 0
-        duration = 0
-        
-        // Clean up asset loader cache for this video
-        if let url = URL(string: video.videoURL) {
-            Task {
-                await VideoAssetLoader.shared.cleanupAsset(for: url)
-            }
-        }
-    }
-    
-    private func toggleMute() {
-        isMuted.toggle()
-        player?.isMuted = isMuted
-        // Ensure volume is at maximum when unmuting
-        if !isMuted {
-            player?.volume = 1.0
-        }
-    }
-    
-    private func togglePlayPause() {
-        print("Toggle play/pause called. Current state - isPlaying: \(isPlaying)")
-        if isPlaying {
-            player?.pause()
-            print("Video PAUSED")
-        } else {
-            player?.play()
-            print("Video PLAYING")
-        }
-        isPlaying.toggle()
-        showPlayButton = !isPlaying
-        print("State after toggle - isPlaying: \(isPlaying), showPlayButton: \(showPlayButton)")
-        
-        if isPlaying {
-            resetControlsTimer()
-            print("Controls timer reset due to play")
-        } else {
-            showControls = true
-            controlsTimer?.invalidate()
-            print("Controls forced visible due to pause")
-        }
-    }
-    
-    private func setupTimeObserver(for player: AVPlayer) {
-        // Remove existing observer if any
-        if let existing = timeObserver {
-            player.removeTimeObserver(existing)
-            timeObserver = nil
-        }
-        
-        // Get video duration if not already set
-        if duration == 0, let currentItem = player.currentItem {
-            let durationSeconds = currentItem.asset.duration.seconds
-            if durationSeconds.isFinite {
-                self.duration = durationSeconds
-            }
-        }
-        
-        // Create new time observer
-        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
-            guard let player = player else { return }
-            
-            // Update current time if not dragging
-            if !isDraggingProgress {
-                let seconds = CMTimeGetSeconds(time)
-                if seconds.isFinite {
-                    currentTime = seconds
-                }
-            }
-            
-            // Update playing state
-            let isCurrentlyPlaying = player.rate != 0
-            if isPlaying != isCurrentlyPlaying {
-                print("Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(isPlaying)")
-                isPlaying = isCurrentlyPlaying
-                showPlayButton = !isCurrentlyPlaying
-            }
-            
-            // Only reset controls if enough time has passed and we're not already resetting
-            if isPlaying && showControls && !isDraggingProgress && !isResettingControls {
-                let now = Date()
-                if now.timeIntervalSince(lastControlReset) >= 3.0 {
-                    print("Controls timer reset allowed - time since last reset: \(now.timeIntervalSince(lastControlReset))s")
-                    resetControlsTimer()
-                }
             }
         }
     }
@@ -939,52 +1002,21 @@ struct VideoPlayerView: View {
         lastControlReset = Date()
         
         // Only set timer if we're playing
-        if isPlaying && !isDraggingProgress {
+        if playerViewModel.isPlaying && !isDraggingProgress {
             controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                if isPlaying && !isDraggingProgress {
+                if playerViewModel.isPlaying && !isDraggingProgress {
                     withAnimation {
                         showControls = false
                         print("Controls HIDDEN - timer expired")
                     }
                 } else {
-                    print("Controls NOT hidden - isPlaying: \(isPlaying), isDraggingProgress: \(isDraggingProgress)")
+                    print("Controls NOT hidden - isPlaying: \(playerViewModel.isPlaying), isDraggingProgress: \(isDraggingProgress)")
                 }
                 isResettingControls = false
             }
         } else {
             isResettingControls = false
         }
-    }
-    
-    private func setupPlayerItemObservers(for playerItem: AVPlayerItem) {
-        // Configure looping with a single observer
-        let loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-        
-        // Store the observer for cleanup
-        self.loopObserver = loopObserver
-        
-        // Set up error observation with a single observer
-        let errorObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { notification in
-            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                print("Error playing video: \(error.localizedDescription)")
-                errorMessage = error.localizedDescription
-                showError = true
-            }
-        }
-        
-        // Store the error observer for cleanup
-        self.errorObserver = errorObserver
     }
 }
 
