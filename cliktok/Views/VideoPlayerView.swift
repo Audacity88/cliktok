@@ -196,464 +196,288 @@ actor VideoAssetLoader {
     }
 }
 
-struct VideoPlayerView: View {
-    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
-    @StateObject private var tipViewModel = TipViewModel.shared
-    @Environment(\.dismiss) private var dismiss
-    let video: Video
-    let showBackButton: Bool
-    @Binding var clearSearchOnDismiss: Bool
-    @Binding var isVisible: Bool
-    
-    // Player states
-    @State private var player: AVPlayer?
-    @State private var isPlaying = false
-    @State private var isMuted = false
-    @State private var isLoadingVideo = false
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 0
-    @State private var isDraggingProgress = false
-    @State private var showControls = true
-    @State private var controlsTimer: Timer?
-    @State private var showPlayButton = false
-    @State private var timeObserver: Any?
-    
-    // Creator and UI states
-    @State private var showAddFundsAlert = false
-    @State private var showError = false
-    @State private var errorMessage = ""
-    @State private var showWallet = false
-    @State private var totalTips = 0
-    @State private var showTipBubble = false
-    @State private var showTippedText = false
-    @State private var showTipSheet = false
-    @State private var showDeleteAlert = false
-    @State private var showEditSheet = false
-    @State private var creator: User?
-    @State private var loopObserver: NSObjectProtocol?
-    @State private var errorObserver: NSObjectProtocol?
-    let onPrefetch: (([Video]) -> Void)?
-    
-    init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, onPrefetch: (([Video]) -> Void)? = nil) {
-        self.video = video
-        self.showBackButton = showBackButton
-        self._clearSearchOnDismiss = clearSearchOnDismiss
-        self._isVisible = isVisible
-        self.onPrefetch = onPrefetch
-        
-        // Configure audio session once at init
-        Task {
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch {
-                print("Failed to set audio session category: \(error)")
-            }
-        }
-    }
+// Video Controls Overlay
+struct VideoControlsOverlay: View {
+    let showControls: Bool
+    let isPlaying: Bool
+    let togglePlayPause: () -> Void
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                if let player = player {
-                    VideoPlayer(player: player)
-                        .edgesIgnoringSafeArea(.all)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .overlay(
-                            Color.black.opacity(0.01)  // Nearly transparent overlay to catch taps
-                                .onTapGesture(count: 1) {
-                                    withAnimation {
-                                        showControls.toggle()
-                                        resetControlsTimer()
-                                    }
-                                }
-                                .allowsHitTesting(duration <= 30) // Only allow tap gesture if no progress bar
-                        )
-                        .overlay(
-                            Group {
-                                if duration > 30 && showControls {
-                                    VStack {
-                                        Spacer()
-                                        // Progress bar
-                                        ProgressBar(
-                                            value: $currentTime,
-                                            total: duration,
-                                            isDragging: $isDraggingProgress,
-                                            onChanged: { newValue in
-                                                currentTime = newValue
-                                                // Seek while dragging for immediate feedback
-                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-                                                resetControlsTimer()
-                                            },
-                                            onEnded: { newValue in
-                                                currentTime = newValue
-                                                // Seek with exact timing when drag ends
-                                                let time = CMTime(seconds: newValue, preferredTimescale: 1000)
-                                                player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
-                                                    if finished && isPlaying {
-                                                        player.play()
-                                                    }
-                                                }
-                                                resetControlsTimer()
-                                            }
-                                        )
-                                        .frame(height: 20)
-                                        .padding(.horizontal)
-                                        .padding(.bottom, 200) // Fixed position above heart icon
-                                        .zIndex(1) // Ensure progress bar is above the tap overlay
-                                    }
-                                }
-                            }
-                        )
-                        .overlay(
-                            Group {
-                                if showControls {
-                                    Button(action: togglePlayPause) {
-                                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fit)
-                                            .frame(width: 60, height: 60)
-                                            .foregroundColor(.white)
-                                            .opacity(0.8)
-                                    }
-                                }
-                            }
-                        )
-                } else if isLoadingVideo {
-                    Color.black
-                        .edgesIgnoringSafeArea(.all)
-                        .overlay(
-                            ProgressView()
-                                .tint(.white)
-                        )
-                } else {
-                    Color.black
-                        .edgesIgnoringSafeArea(.all)
-                }
-                
-                // Back Button and Menu
-                VStack {
-                    if showBackButton {
-                        HStack {
-                            Button(action: {
-                                cleanupPlayer()
-                                clearSearchOnDismiss = true
-                                dismiss()
-                            }) {
-                                Image(systemName: "chevron.left")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .padding()
-                                    .background(Circle().fill(Color.black.opacity(0.5)))
-                            }
-                            .padding(.leading)
-                            
-                            Spacer()
-                            
-                            // Add three-dot menu if user owns the video
-                            if video.userID == Auth.auth().currentUser?.uid {
-                                Menu {
-                                    Button {
-                                        showEditSheet = true
-                                    } label: {
-                                        Label("Edit Video", systemImage: "pencil")
-                                    }
-                                    
-                                    Button(role: .destructive) {
-                                        showDeleteAlert = true
-                                    } label: {
-                                        Label("Delete Video", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                        .frame(width: 44, height: 44) // Increase touch target
-                                        .contentShape(Rectangle()) // Make entire frame tappable
-                                }
-                                .padding(.trailing)
-                            }
-                        }
-                        .padding(.top, 50)
-                    } else {
-                        // Show menu even when back button is hidden
-                        if video.userID == Auth.auth().currentUser?.uid {
-                            HStack {
-                                Spacer()
-                                Menu {
-                                    Button {
-                                        showEditSheet = true
-                                    } label: {
-                                        Label("Edit Video", systemImage: "pencil")
-                                    }
-                                    
-                                    Button(role: .destructive) {
-                                        showDeleteAlert = true
-                                    } label: {
-                                        Label("Delete Video", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .font(.title2)
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                        .frame(width: 44, height: 44) // Increase touch target
-                                        .contentShape(Rectangle()) // Make entire frame tappable
-                                }
-                                .padding(.trailing)
-                            }
-                            .padding(.top, 50)
+        Button(action: {
+            print("Play/Pause button tapped - isPlaying before tap: \(isPlaying)")
+            togglePlayPause()
+        }) {
+            Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 70, height: 70)  // Slightly larger touch target
+                .foregroundColor(.white)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .opacity(showControls ? 0.9 : 0)
+        .animation(.easeInOut(duration: 0.2), value: showControls)
+    }
+}
+
+// Video Progress Overlay
+struct VideoProgressOverlay: View {
+    let duration: Double
+    let showControls: Bool
+    @Binding var currentTime: Double
+    @Binding var isDraggingProgress: Bool
+    let isPlaying: Bool
+    let player: AVPlayer
+    let resetControlsTimer: () -> Void
+    
+    var body: some View {
+        VStack {
+            Spacer()
+            ProgressBar(
+                value: $currentTime,
+                total: duration,
+                isDragging: $isDraggingProgress,
+                onChanged: { newValue in
+                    currentTime = newValue
+                    let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                    player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+                    resetControlsTimer()
+                },
+                onEnded: { newValue in
+                    currentTime = newValue
+                    let time = CMTime(seconds: newValue, preferredTimescale: 1000)
+                    player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) { finished in
+                        if finished && isPlaying {
+                            player.play()
                         }
                     }
-                    
-                    Spacer()
-                    
-                    // Overlay Controls
+                    resetControlsTimer()
+                }
+            )
+            .padding(.horizontal)
+            .padding(.bottom, 200)
+            .opacity(showControls || isDraggingProgress ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: showControls)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// Video Menu Button
+struct VideoMenuButton: View {
+    let showEditSheet: Binding<Bool>
+    let showDeleteAlert: Binding<Bool>
+    
+    var body: some View {
+        Menu {
+            Button {
+                showEditSheet.wrappedValue = true
+            } label: {
+                Label("Edit Video", systemImage: "pencil")
+            }
+            
+            Button(role: .destructive) {
+                showDeleteAlert.wrappedValue = true
+            } label: {
+                Label("Delete Video", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title2)
+                .foregroundColor(.white)
+                .shadow(radius: 2)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .padding(.trailing)
+    }
+}
+
+// Video Control Buttons
+struct VideoControlButtons: View {
+    let totalTips: Int
+    let tipViewModel: TipViewModel
+    let isMuted: Bool
+    let video: Video
+    @Binding var showTipBubble: Bool
+    @Binding var showTippedText: Bool
+    @Binding var showAddFundsAlert: Bool
+    @Binding var showError: Bool
+    @Binding var errorMessage: String
+    let toggleMute: () -> Void
+    @State private var isHeartFilled = false
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // Like/Tip Button
+            VStack(spacing: 20) {
+                ZStack(alignment: .center) {
+                    // Container for fixed positioning
                     VStack {
                         Spacer()
-                        
-                        // Video info and controls
-                        HStack(alignment: .bottom, spacing: 16) {
-                            // Video details
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(video.caption)
-                                    .foregroundColor(.white)
-                                    .font(.system(size: 16, weight: .semibold))
+                            .frame(height: 32)
+                    }
+                    .frame(width: 100, height: 80)
+                    
+                    // Heart button with retro styling
+                    VStack(spacing: 4) {
+                        Button(action: {
+                            Task {
+                                do {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                        isHeartFilled = true
+                                    }
+                                    guard let videoId = video.id else { return }
+                                    try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
+                                    withAnimation {
+                                        showTipBubble = true
+                                        showTippedText = true
+                                    }
+                                    
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                        showTipBubble = false
+                                        showTippedText = false
+                                    }
+                                } catch PaymentError.insufficientFunds {
+                                    showAddFundsAlert = true
+                                } catch {
+                                    showError = true
+                                    errorMessage = error.localizedDescription
+                                }
+                            }
+                        }) {
+                            VStack(spacing: 4) {
+                                Image(systemName: "heart\(isHeartFilled || totalTips > 0 ? ".fill" : "")")
+                                    .resizable()
+                                    .frame(width: 32, height: 32)
+                                    .foregroundColor(isHeartFilled || totalTips > 0 ? .red : .gray)
                                     .shadow(radius: 2)
-                                    .multilineTextAlignment(.leading)
                                 
-                                if !video.hashtags.isEmpty {
-                                    Text(video.hashtags.map { "#\($0)" }.joined(separator: " "))
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .font(.system(size: 14, weight: .medium))
-                                        .shadow(radius: 2)
-                                }
-                                
-                                if let creator = creator {
-                                    HStack(alignment: .center, spacing: 10) {
-                                        NavigationLink(destination: ProfileView(userId: video.userID)) {
-                                            ProfileImageView(imageURL: creator.profileImageURL, size: 40)
-                                        }
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(creator.displayName)
-                                                .font(.headline)
-                                                .foregroundColor(.white)
-                                                .shadow(radius: 2)
-                                        }
-                                    }
-                                    .padding(.top, 8)
-                                } else {
-                                    ProgressView()
-                                        .frame(width: 40, height: 40)
-                                        .padding(.top, 8)
-                                }
+                                Text("\(totalTips)¢")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.gray)
+                                    .shadow(radius: 1)
                             }
-                            .frame(maxWidth: geometry.size.width * 0.7, alignment: .leading)
-                            
-                            Spacer()
-                            
-                            // Control buttons
-                            VStack(spacing: 20) {
-                                // Like/Tip Button
-                                VStack(spacing: 20) {
-                                    ZStack(alignment: .center) {
-                                        // Container for fixed positioning
-                                        VStack {
-                                            Spacer()
-                                                .frame(height: 32) // Match heart height
-                                        }
-                                        .frame(width: 100, height: 80) // Fixed container size
-                                        
-                                        // Heart button
-                                        VStack(spacing: 4) {
-                                            Button(action: {
-                                                Task {
-                                                    do {
-                                                        guard let videoId = video.id else { return }
-                                                        try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
-                                                        totalTips += 1
-                                                        
-                                                        // Show both animations
-                                                        withAnimation {
-                                                            showTipBubble = true
-                                                            showTippedText = true
-                                                        }
-                                                        
-                                                        // Hide animations after delay
-                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                                            showTipBubble = false
-                                                            showTippedText = false
-                                                        }
-                                                    } catch PaymentError.insufficientFunds {
-                                                        showAddFundsAlert = true
-                                                    } catch {
-                                                        showError = true
-                                                        errorMessage = error.localizedDescription
-                                                    }
-                                                }
-                                            }) {
-                                                VStack(spacing: 4) {
-                                                    Image(systemName: "heart\(totalTips > 0 ? ".fill" : "")")
-                                                        .resizable()
-                                                        .frame(width: 32, height: 32)
-                                                        .foregroundColor(totalTips > 0 ? .red : .white)
-                                                        .shadow(radius: 2)
-                                                    
-                                                    if totalTips > 0 {
-                                                        Text("\(totalTips)¢")
-                                                            .font(.system(size: 12, weight: .bold))
-                                                            .foregroundColor(.white)
-                                                            .shadow(radius: 1)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .offset(x: 40, y: 35)
-                                        
-                                        // Tipped text overlay
-                                        if showTippedText {
-                                            Text("Tipped!")
-                                                .font(.system(size: 12))
-                                                .foregroundColor(.white)
-                                                .shadow(radius: 1)
-                                                .frame(width: 100)
-                                                .offset(x: 40, y: 27)
-                                                .transition(.opacity)
-                                        }
-                                        
-                                        // Tip bubble
-                                        if showTipBubble {
-                                            TipBubbleView()
-                                                .offset(x: 60, y: -30)
-                                        }
-                                    }
-                                }
-                                .disabled(tipViewModel.isProcessing)
-                                
-                                // Mute Button
-                                Button(action: toggleMute) {
-                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                }
-                                .offset(x: 40, y: 10) 
-                                
-                                // View Count
-                                VStack(spacing: 4) {
-                                    Image(systemName: "eye.fill")
-                                        .font(.system(size: 30))
-                                        .foregroundColor(.white)
-                                        .shadow(radius: 2)
-                                    Text("\(video.views)")
-                                        .foregroundColor(.white)
-                                        .font(.system(size: 14))
-                                        .shadow(radius: 2)
-                                }
-                                .offset(x: 40, y: 10) 
-                            }
-                            .padding(.trailing)
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 30)
-                    }
-                }
-            }
-            .navigationBarHidden(true)
-            .edgesIgnoringSafeArea(.all)
-            .onAppear {
-                print("VideoPlayerView appeared for video: \(video.id)")
-                Task {
-                    // Load video without autoplaying
-                    await loadAndPlayVideo()
-                    
-                    // Load creator profile and tip data
-                    if creator == nil {
-                        await feedViewModel.fetchCreators(for: [video])
-                        creator = feedViewModel.getCreator(for: video)
-                    }
-                    await tipViewModel.loadBalance()
-                    await tipViewModel.loadTipHistory()
-                }
-            }
-            .onChange(of: isVisible) { newValue in
-                if newValue {
-                    // Update view count and play when becoming visible
-                    Task {
-                        print("Video becoming visible: \(video.id)")
-                        await feedViewModel.updateVideoStats(video: video)
-                        player?.play()
-                    }
-                } else {
-                    print("Video becoming hidden: \(video.id)")
-                    player?.pause()
-                }
-            }
-            .onDisappear {
-                cleanupPlayer()
-            }
-            .onChange(of: showEditSheet) { oldValue, newValue in
-                if newValue {
-                    // Just pause the video when edit sheet is shown
-                    player?.pause()
-                    isPlaying = false
-                } else {
-                    // Resume playing from current position when edit sheet is dismissed
-                    player?.play()
-                    isPlaying = true
-                    
-                    // Refresh the video data
-                    Task {
-                        await feedViewModel.loadInitialVideos()
-                    }
-                }
-            }
-            .sheet(isPresented: $showEditSheet) {
-                VideoEditView(video: video, isPresented: $showEditSheet)
-                    .environmentObject(feedViewModel)
-            }
-            .alert("Add Funds", isPresented: $showAddFundsAlert) {
-                Button("Add Funds") {
-                    showWallet = true
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("You need more funds to tip this video.")
-            }
-            .alert("Error", isPresented: $showError) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(errorMessage)
-            }
-            .alert("Delete Video", isPresented: $showDeleteAlert) {
-                Button("Delete", role: .destructive) {
-                    Task {
-                        do {
-                            try await feedViewModel.deleteVideo(video)
-                            cleanupPlayer()
-                            dismiss()
-                        } catch {
-                            errorMessage = error.localizedDescription
-                            showError = true
                         }
                     }
+                    .offset(x: 40, y: 35)
+                    
+                    if showTippedText {
+                        Text("Tipped!")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundColor(.green)
+                            .shadow(radius: 1)
+                            .frame(width: 100)
+                            .offset(x: 40, y: 27)
+                            .transition(.opacity)
+                    }
+                    
+                    if showTipBubble {
+                        TipBubbleView()
+                            .offset(x: 60, y: -30)
+                    }
                 }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Are you sure you want to delete this video? This action cannot be undone.")
             }
-            .sheet(isPresented: $showWallet) {
-                WalletView()
+            .disabled(tipViewModel.isProcessing)
+            
+            // Mute Button
+            Button(action: toggleMute) {
+                Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.gray)
+                    .shadow(radius: 2)
             }
+            .offset(x: 40, y: 10)
+            
+            // View Count
+            VStack(spacing: 4) {
+                Image(systemName: "eye.fill")
+                    .font(.system(size: 30))
+                    .foregroundColor(.gray)
+                    .shadow(radius: 2)
+                Text("\(video.views)")
+                    .foregroundColor(.gray)
+                    .font(.system(size: 14, design: .monospaced))
+                    .shadow(radius: 2)
+            }
+            .offset(x: 40, y: 10)
         }
+        .padding(.trailing)
+    }
+}
+
+// Video Info Section
+struct VideoInfoSection: View {
+    let video: Video
+    let creator: User?
+    let geometry: GeometryProxy
+    let totalTips: Int
+    let tipViewModel: TipViewModel
+    let isMuted: Bool
+    @Binding var showTipBubble: Bool
+    @Binding var showTippedText: Bool
+    @Binding var showAddFundsAlert: Bool
+    @Binding var showError: Bool
+    @Binding var errorMessage: String
+    let toggleMute: () -> Void
+    
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            RetroVideoInfo(
+                title: video.caption.cleaningHTMLTags(),
+                description: (video.description ?? "").cleaningHTMLTags(),
+                hashtags: video.hashtags,
+                creator: creator,
+                showCreator: true
+            )
+            .frame(maxWidth: geometry.size.width * 0.85, alignment: .leading)
+            
+            Spacer(minLength: 0)
+            
+            VideoControlButtons(
+                totalTips: totalTips,
+                tipViewModel: tipViewModel,
+                isMuted: isMuted,
+                video: video,
+                showTipBubble: $showTipBubble,
+                showTippedText: $showTippedText,
+                showAddFundsAlert: $showAddFundsAlert,
+                showError: $showError,
+                errorMessage: $errorMessage,
+                toggleMute: toggleMute
+            )
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 30)
+    }
+}
+
+// Add this before the VideoPlayerView struct
+class VideoPlayerViewModel: NSObject, ObservableObject {
+    @Published var player: AVPlayer?
+    @Published var isPlaying = false
+    @Published var isMuted = false
+    @Published var isLoadingVideo = false
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 0
+    @Published var showPlayButton = false
+    @Published var errorMessage = ""
+    @Published var showError = false
+    
+    private var timeObserverToken: Any?
+    private var observedPlayer: AVPlayer?
+    private var videoURL: String?
+    private var isVisible: Bool = false
+    
+    func setVideo(url: String, isVisible: Bool) {
+        self.videoURL = url
+        self.isVisible = isVisible
     }
     
-    private func loadAndPlayVideo() async {
-        guard let url = URL(string: video.videoURL) else {
-            print("VideoPlayerView: Invalid URL for video: \(video.id)")
+    func loadAndPlayVideo() async {
+        guard let urlString = videoURL,
+              let url = URL(string: urlString) else {
+            print("VideoPlayerView: Invalid URL for video")
             return
         }
         
@@ -681,6 +505,9 @@ struct VideoPlayerView: View {
             playerItem.preferredForwardBufferDuration = 2
             playerItem.automaticallyPreservesTimeOffsetFromLive = false
             
+            // Add error handling for playback issues
+            playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
+            
             await MainActor.run {
                 print("VideoPlayerView: Setting up player on main thread")
                 
@@ -695,14 +522,20 @@ struct VideoPlayerView: View {
                 newPlayer.volume = 1.0
                 
                 setupTimeObserver(for: newPlayer)
-                setupPlayerItemObservers(for: playerItem)
                 
                 self.player = newPlayer
                 
-                print("VideoPlayerView: Starting playback")
-                newPlayer.play()
-                isPlaying = true
-                showPlayButton = false
+                // Only start playing if this video is visible
+                if isVisible {
+                    print("VideoPlayerView: Starting playback (video is visible)")
+                    newPlayer.play()
+                    isPlaying = true
+                    showPlayButton = false
+                } else {
+                    print("VideoPlayerView: Video loaded but not playing (video is not visible)")
+                    isPlaying = false
+                    showPlayButton = true
+                }
                 
                 print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
                 isLoadingVideo = false
@@ -717,20 +550,76 @@ struct VideoPlayerView: View {
         }
     }
     
-    private func cleanupPlayer() {
+    override public func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+        if keyPath == #keyPath(AVPlayerItem.status) {
+            let status: AVPlayerItem.Status
+            if let statusNumber = change?[.newKey] as? NSNumber {
+                status = AVPlayerItem.Status(rawValue: statusNumber.intValue)!
+            } else {
+                status = .unknown
+            }
+            
+            switch status {
+            case .failed:
+                if let playerItem = object as? AVPlayerItem,
+                   let error = playerItem.error as NSError? {
+                    print("VideoPlayerView: Playback failed with error: \(error.localizedDescription)")
+                    
+                    // Handle invalid sample cursor error
+                    if error.domain == AVFoundationErrorDomain && 
+                       (error.localizedDescription.contains("Invalid sample cursor") ||
+                        error.localizedDescription.contains("sample reading")) {
+                        
+                        Task { @MainActor in
+                            // Clean up the current player
+                            cleanupPlayer()
+                            
+                            // Clear asset cache for this URL
+                            if let urlString = videoURL,
+                               let url = URL(string: urlString) {
+                                await VideoAssetLoader.shared.cleanupAsset(for: url)
+                            }
+                            
+                            // Try to reload the video after a short delay
+                            try? await Task.sleep(nanoseconds: 1 * NSEC_PER_SEC)
+                            await loadAndPlayVideo()
+                        }
+                    } else {
+                        Task { @MainActor in
+                            errorMessage = error.localizedDescription
+                            showError = true
+                        }
+                    }
+                }
+            case .readyToPlay:
+                print("VideoPlayerView: Player item is ready to play")
+            case .unknown:
+                print("VideoPlayerView: Player item status is unknown")
+            @unknown default:
+                print("VideoPlayerView: Player item has unhandled status")
+            }
+        }
+    }
+    
+    func cleanupPlayer() {
         print("VideoPlayerView: Cleaning up player")
         if let currentPlayer = player {
             currentPlayer.pause()
-            currentPlayer.replaceCurrentItem(with: nil)
             
-            // Remove observers
-            if let observer = timeObserver {
-                currentPlayer.removeTimeObserver(observer)
-                timeObserver = nil
+            // Remove KVO observer from player item
+            if let playerItem = currentPlayer.currentItem {
+                playerItem.removeObserver(self, forKeyPath: #keyPath(AVPlayerItem.status))
             }
             
-            // Remove KVO observers
-            NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: currentPlayer.currentItem)
+            // Only remove the time observer if it was added to this player instance
+            if currentPlayer === observedPlayer, let token = timeObserverToken {
+                print("VideoPlayerView: Removing time observer")
+                currentPlayer.removeTimeObserver(token)
+                timeObserverToken = nil
+                observedPlayer = nil
+            }
+            
+            currentPlayer.replaceCurrentItem(with: nil)
         }
         
         // Clear player and reset state
@@ -741,130 +630,393 @@ struct VideoPlayerView: View {
         duration = 0
         
         // Clean up asset loader cache for this video
-        if let url = URL(string: video.videoURL) {
+        if let urlString = videoURL,
+           let url = URL(string: urlString) {
             Task {
                 await VideoAssetLoader.shared.cleanupAsset(for: url)
             }
         }
     }
     
-    private func toggleMute() {
+    private func setupTimeObserver(for player: AVPlayer) {
+        // Remove existing observer if any
+        if let existingPlayer = observedPlayer, let token = timeObserverToken {
+            print("VideoPlayerView: Removing existing time observer")
+            existingPlayer.removeTimeObserver(token)
+            timeObserverToken = nil
+            observedPlayer = nil
+        }
+        
+        // Create new time observer
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        let token = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            guard let self = self else { return }
+            
+            // Update current time
+            let seconds = CMTimeGetSeconds(time)
+            if seconds.isFinite {
+                self.currentTime = seconds
+            }
+            
+            // Update playing state
+            let isCurrentlyPlaying = player.rate != 0
+            if self.isPlaying != isCurrentlyPlaying {
+                print("Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying)")
+                self.isPlaying = isCurrentlyPlaying
+                self.showPlayButton = !isCurrentlyPlaying
+            }
+        }
+        
+        // Store the token and player reference
+        timeObserverToken = token
+        observedPlayer = player
+        print("VideoPlayerView: Added new time observer")
+    }
+    
+    func togglePlayPause() {
+        if isPlaying {
+            player?.pause()
+            print("Video PAUSED")
+        } else {
+            player?.play()
+            print("Video PLAYING")
+        }
+        isPlaying.toggle()
+        showPlayButton = !isPlaying
+    }
+    
+    func toggleMute() {
         isMuted.toggle()
         player?.isMuted = isMuted
-        // Ensure volume is at maximum when unmuting
         if !isMuted {
             player?.volume = 1.0
         }
     }
     
-    private func togglePlayPause() {
-        print("Toggle play/pause called. Current state - isPlaying: \(isPlaying)")
-        if isPlaying {
-            player?.pause()
-        } else {
+    func updateVisibility(_ isVisible: Bool) {
+        self.isVisible = isVisible
+        if isVisible {
             player?.play()
-        }
-        isPlaying.toggle()
-        showPlayButton = !isPlaying
-        
-        if isPlaying {
-            resetControlsTimer()
+            isPlaying = true
+            showPlayButton = false
         } else {
-            showControls = true
-            controlsTimer?.invalidate()
+            player?.pause()
+            isPlaying = false
+            showPlayButton = true
         }
     }
     
-    private func setupTimeObserver(for player: AVPlayer) {
-        // Remove existing observer if any
-        if let existing = timeObserver {
-            player.removeTimeObserver(existing)
-            timeObserver = nil
-        }
+    func seekTo(time: Double) {
+        let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
+        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+}
+
+struct VideoPlayerView: View {
+    @EnvironmentObject private var feedViewModel: VideoFeedViewModel
+    @StateObject private var tipViewModel = TipViewModel.shared
+    @StateObject private var playerViewModel = VideoPlayerViewModel()
+    @Environment(\.dismiss) private var dismiss
+    let video: Video
+    let showBackButton: Bool
+    @Binding var clearSearchOnDismiss: Bool
+    @Binding var isVisible: Bool
+    
+    // UI states
+    @State private var isDraggingProgress = false
+    @State private var showControls = true
+    @State private var controlsTimer: Timer?
+    @State private var showAddFundsAlert = false
+    @State private var showWallet = false
+    @State private var totalTips = 0
+    @State private var showTipBubble = false
+    @State private var showTippedText = false
+    @State private var showTipSheet = false
+    @State private var showDeleteAlert = false
+    @State private var showEditSheet = false
+    @State private var creator: User?
+    @State private var lastControlReset = Date()
+    @State private var isResettingControls = false
+    @State private var showError = false
+    
+    let onPrefetch: (([Video]) -> Void)?
+    
+    init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, onPrefetch: (([Video]) -> Void)? = nil) {
+        self.video = video
+        self.showBackButton = showBackButton
+        self._clearSearchOnDismiss = clearSearchOnDismiss
+        self._isVisible = isVisible
+        self.onPrefetch = onPrefetch
         
-        // Get video duration if not already set
-        if duration == 0, let currentItem = player.currentItem {
-            let durationSeconds = currentItem.asset.duration.seconds
-            if durationSeconds.isFinite {
-                self.duration = durationSeconds
+        // Configure audio session once at init
+        Task {
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try AVAudioSession.sharedInstance().setActive(true)
+            } catch {
+                print("Failed to set audio session category: \(error)")
             }
         }
-        
-        // Create new time observer
-        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak player] time in
-            guard let player = player else { return }
-            
-            // Update current time if not dragging
-            if !isDraggingProgress {
-                let seconds = CMTimeGetSeconds(time)
-                if seconds.isFinite {
-                    currentTime = seconds
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .top) {
+                // Black background
+                Color.black.edgesIgnoringSafeArea(.all)
+                
+                // Video player and controls
+                Group {
+                    if let player = playerViewModel.player {
+                        VideoPlayer(player: player)
+                            .edgesIgnoringSafeArea(.all)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .overlay {
+                                ZStack {
+                                    // Full-screen tap gesture area
+                                    Color.black.opacity(0.01)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            print("DEBUG: ====== Background Tap Event ======")
+                                            print("DEBUG: Location: Full screen background")
+                                            print("DEBUG: Current States:")
+                                            print("DEBUG: - showControls: \(showControls)")
+                                            print("DEBUG: - showPlayButton: \(playerViewModel.showPlayButton)")
+                                            print("DEBUG: - isPlaying: \(playerViewModel.isPlaying)")
+                                            print("DEBUG: - controlsTimer active: \(controlsTimer != nil)")
+                                            
+                                            withAnimation {
+                                                showControls.toggle()
+                                                print("DEBUG: Controls toggled to: \(showControls)")
+                                                
+                                                if showControls {
+                                                    print("DEBUG: Starting controls auto-hide timer")
+                                                    resetControlsTimer()
+                                                } else {
+                                                    print("DEBUG: Invalidating controls timer")
+                                                    controlsTimer?.invalidate()
+                                                }
+                                            }
+                                            print("DEBUG: ================================")
+                                        }
+                                        .allowsHitTesting(!playerViewModel.showPlayButton)  // Only allow background taps when play button is hidden
+
+                                    // Controls layer
+                                    VStack {
+                                        Spacer()
+                                        
+                                        // Center container for play/pause button
+                                        ZStack {
+                                            // Play/Pause button
+                                            VideoControlsOverlay(
+                                                showControls: showControls || playerViewModel.showPlayButton,
+                                                isPlaying: playerViewModel.isPlaying,
+                                                togglePlayPause: playerViewModel.togglePlayPause
+                                            )
+                                            .allowsHitTesting(true)
+                                            .zIndex(100) // Ensure button is on top of all layers
+                                        }
+                                        .frame(maxWidth: .infinity, maxHeight: 100)  // Fixed height for better touch target
+                                        .contentShape(Rectangle())
+                                        .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                        
+                                        Spacer()
+                                        
+                                        // Progress bar
+                                        VideoProgressOverlay(
+                                            duration: playerViewModel.duration,
+                                            showControls: showControls,
+                                            currentTime: $playerViewModel.currentTime,
+                                            isDraggingProgress: $isDraggingProgress,
+                                            isPlaying: playerViewModel.isPlaying,
+                                            player: player,
+                                            resetControlsTimer: resetControlsTimer
+                                        )
+                                        .allowsHitTesting(true)
+                                    }
+                                }
+                            }
+                    } else if playerViewModel.isLoadingVideo {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+                
+                // Content overlay
+                VStack(spacing: 0) {
+                    if showBackButton {
+                        HStack {
+                            Button(action: {
+                                playerViewModel.cleanupPlayer()
+                                clearSearchOnDismiss = true
+                                dismiss()
+                            }) {
+                                Image(systemName: "chevron.left")
+                                    .font(.title2)
+                                    .foregroundColor(.white)
+                                    .padding()
+                                    .background(Circle().fill(Color.black.opacity(0.5)))
+                            }
+                            .padding(.leading)
+                            
+                            Spacer()
+                            
+                            if video.userID == Auth.auth().currentUser?.uid {
+                                VideoMenuButton(showEditSheet: $showEditSheet, showDeleteAlert: $showDeleteAlert)
+                            }
+                        }
+                        .padding(.top, 44) // Add padding to account for status bar
+                    } else if video.userID == Auth.auth().currentUser?.uid {
+                        HStack {
+                            Spacer()
+                            VideoMenuButton(showEditSheet: $showEditSheet, showDeleteAlert: $showDeleteAlert)
+                        }
+                        .padding(.top, 44) // Add padding to account for status bar
+                    }
+                    
+                    Spacer()
+                    
+                    // Overlay Controls
+                    VStack {
+                        Spacer()
+                        
+                        VideoInfoSection(
+                            video: video,
+                            creator: creator,
+                            geometry: geometry,
+                            totalTips: totalTips,
+                            tipViewModel: tipViewModel,
+                            isMuted: playerViewModel.isMuted,
+                            showTipBubble: $showTipBubble,
+                            showTippedText: $showTippedText,
+                            showAddFundsAlert: $showAddFundsAlert,
+                            showError: $showError,
+                            errorMessage: $playerViewModel.errorMessage,
+                            toggleMute: playerViewModel.toggleMute
+                        )
+                    }
+                }
+                
+                // Fixed status bar at the top
+                RetroStatusBar()
+                    .frame(height: 44)
+            }
+            .navigationBarHidden(true)
+            .edgesIgnoringSafeArea(.all)
+            .onAppear {
+                print("VideoPlayerView appeared for video: \(video.id)")
+                playerViewModel.setVideo(url: video.videoURL, isVisible: isVisible)
+                Task {
+                    await playerViewModel.loadAndPlayVideo()
+                    
+                    // Load creator profile and tip data
+                    if creator == nil {
+                        await feedViewModel.fetchCreators(for: [video])
+                        creator = feedViewModel.getCreator(for: video)
+                    }
+                    await tipViewModel.loadBalance()
+                    await tipViewModel.loadTipHistory()
                 }
             }
-            
-            // Update playing state
-            let isCurrentlyPlaying = player.rate != 0
-            if isPlaying != isCurrentlyPlaying {
-                isPlaying = isCurrentlyPlaying
-                showPlayButton = !isCurrentlyPlaying
+            .onChange(of: isVisible) { newValue in
+                if newValue {
+                    Task {
+                        await feedViewModel.updateVideoStats(video: video)
+                    }
+                }
+                playerViewModel.updateVisibility(newValue)
             }
-            
-            // Hide controls after delay if video is playing
-            if isPlaying && showControls && !isDraggingProgress {
-                resetControlsTimer()
+            .onDisappear {
+                playerViewModel.cleanupPlayer()
+            }
+            .onChange(of: showEditSheet) { oldValue, newValue in
+                if newValue {
+                    // Just pause the video when edit sheet is shown
+                    playerViewModel.player?.pause()
+                    playerViewModel.isPlaying = false
+                } else {
+                    // Resume playing from current position when edit sheet is dismissed
+                    playerViewModel.player?.play()
+                    playerViewModel.isPlaying = true
+                    
+                    // Refresh the video data
+                    Task {
+                        await feedViewModel.loadInitialVideos()
+                    }
+                }
+            }
+            .sheet(isPresented: $showEditSheet) {
+                VideoEditView(video: video, isPresented: $showEditSheet)
+                    .environmentObject(feedViewModel)
+            }
+            .alert("Add Funds", isPresented: $showAddFundsAlert) {
+                Button("Add Funds") {
+                    showWallet = true
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You need more funds to tip this video.")
+            }
+            .alert("Error", isPresented: $showError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(playerViewModel.errorMessage)
+            }
+            .alert("Delete Video", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) {
+                    Task {
+                        do {
+                            try await feedViewModel.deleteVideo(video)
+                            playerViewModel.cleanupPlayer()
+                            dismiss()
+                        } catch {
+                            playerViewModel.errorMessage = error.localizedDescription
+                            playerViewModel.showError = true
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Are you sure you want to delete this video? This action cannot be undone.")
+            }
+            .sheet(isPresented: $showWallet) {
+                WalletView()
             }
         }
     }
     
     private func resetControlsTimer() {
+        guard !isResettingControls else { return }
+        isResettingControls = true
+        
         // Cancel existing timer
         controlsTimer?.invalidate()
         
         // Show controls
         withAnimation {
             showControls = true
+            print("Controls SHOWN - resetControlsTimer()")
         }
         
-        // Set new timer to hide controls after 3 seconds
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            if isPlaying && !isDraggingProgress {
-                withAnimation {
-                    showControls = false
+        lastControlReset = Date()
+        
+        // Only set timer if we're playing
+        if playerViewModel.isPlaying && !isDraggingProgress {
+            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                if playerViewModel.isPlaying && !isDraggingProgress {
+                    withAnimation {
+                        showControls = false
+                        print("Controls HIDDEN - timer expired")
+                    }
+                } else {
+                    print("Controls NOT hidden - isPlaying: \(playerViewModel.isPlaying), isDraggingProgress: \(isDraggingProgress)")
                 }
+                isResettingControls = false
             }
+        } else {
+            isResettingControls = false
         }
-    }
-    
-    private func setupPlayerItemObservers(for playerItem: AVPlayerItem) {
-        // Configure looping with a single observer
-        let loopObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { [weak player] _ in
-            player?.seek(to: .zero)
-            player?.play()
-        }
-        
-        // Store the observer for cleanup
-        self.loopObserver = loopObserver
-        
-        // Set up error observation with a single observer
-        let errorObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { notification in
-            if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
-                print("Error playing video: \(error.localizedDescription)")
-                errorMessage = error.localizedDescription
-                showError = true
-            }
-        }
-        
-        // Store the error observer for cleanup
-        self.errorObserver = errorObserver
     }
 }
 
@@ -878,43 +1030,39 @@ struct ProgressBar: View {
     
     var body: some View {
         GeometryReader { geometry in
-            HStack(spacing: 0) {
+            ZStack(alignment: .leading) {
+                // Background track
                 Rectangle()
                     .fill(Color.gray.opacity(0.3))
-                    .frame(height: 20)
-                    .contentShape(Rectangle())
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { gesture in
-                                let ratio = gesture.location.x / geometry.size.width
-                                let newValue = total * ratio
-                                isDragging = true
-                                onChanged(newValue)
-                            }
-                            .onEnded { gesture in
-                                let ratio = gesture.location.x / geometry.size.width
-                                let newValue = total * ratio
-                                onEnded(newValue)
-                                isDragging = false
-                            }
-                    )
-                    .overlay {
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                // Progress track
-                                Rectangle()
-                                    .fill(Color.white)
-                                    .frame(width: geo.size.width * CGFloat(value / total), height: 20)
-                                
-                                // Handle
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 20, height: 20)
-                                    .position(x: geo.size.width * CGFloat(value / total), y: geo.size.height / 2)
-                            }
-                        }
-                    }
+                    .frame(height: 4)
+                
+                // Progress track
+                Rectangle()
+                    .fill(Color.green)
+                    .frame(width: geometry.size.width * CGFloat(value / total), height: 4)
+                
+                // Handle
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 12, height: 12)
+                    .position(x: geometry.size.width * CGFloat(value / total), y: geometry.size.height / 2)
             }
+            .contentShape(Rectangle())  // Make entire area tappable
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
+                        let newValue = total * Double(ratio)
+                        isDragging = true
+                        onChanged(newValue)
+                    }
+                    .onEnded { gesture in
+                        let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
+                        let newValue = total * Double(ratio)
+                        onEnded(newValue)
+                        isDragging = false
+                    }
+            )
         }
         .frame(height: 20)
     }

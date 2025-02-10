@@ -7,6 +7,7 @@ struct Video: Identifiable, Codable {
     let videoURL: String
     let thumbnailURL: String?
     var caption: String
+    var description: String?
     var hashtags: [String]
     let createdAt: Date
     var likes: Int
@@ -19,6 +20,7 @@ struct Video: Identifiable, Codable {
         case videoURL = "video_url"
         case thumbnailURL = "thumbnail_url"
         case caption
+        case description
         case hashtags
         case createdAt = "created_at"
         case likes
@@ -31,6 +33,7 @@ struct Video: Identifiable, Codable {
          videoURL: String,
          thumbnailURL: String? = nil,
          caption: String,
+         description: String? = nil,
          hashtags: [String],
          createdAt: Date = Date(),
          likes: Int = 0,
@@ -41,6 +44,7 @@ struct Video: Identifiable, Codable {
         self.videoURL = videoURL
         self.thumbnailURL = thumbnailURL
         self.caption = caption
+        self.description = description
         self.hashtags = hashtags
         self.createdAt = createdAt
         self.likes = likes

@@ -8,6 +8,41 @@
 import SwiftUI
 import SwiftData
 import FirebaseAuth
+import UIKit
+
+struct RetroStatusBar: View {
+    @State private var currentTime = Date()
+    @State private var batteryLevel: Float = 0.0
+    
+    let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    
+    var body: some View {
+        HStack {
+            Text(currentTime, format: .dateTime.hour().minute())
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.green)
+            
+            Spacer()
+            
+            Text("\(max(0, Int(batteryLevel * 100)))%")
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.green)
+        }
+        .padding()
+        .background(Color.black)
+        .onAppear {
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            batteryLevel = UIDevice.current.batteryLevel >= 0 ? UIDevice.current.batteryLevel : 1.0
+        }
+        .onDisappear {
+            UIDevice.current.isBatteryMonitoringEnabled = false
+        }
+        .onReceive(timer) { input in
+            currentTime = input
+            batteryLevel = UIDevice.current.batteryLevel >= 0 ? UIDevice.current.batteryLevel : batteryLevel
+        }
+    }
+}
 
 struct ContentView: View {
     @StateObject private var feedViewModel = VideoFeedViewModel()
@@ -25,21 +60,21 @@ struct ContentView: View {
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = .black
         
-        // Selected state - white
-        appearance.stackedLayoutAppearance.selected.iconColor = .white
-        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
-        appearance.inlineLayoutAppearance.selected.iconColor = .white
-        appearance.inlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
-        appearance.compactInlineLayoutAppearance.selected.iconColor = .white
-        appearance.compactInlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.white]
+        // Selected state - green
+        appearance.stackedLayoutAppearance.selected.iconColor = UIColor.systemGreen
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.systemGreen, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
+        appearance.inlineLayoutAppearance.selected.iconColor = UIColor.systemGreen
+        appearance.inlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.systemGreen, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
+        appearance.compactInlineLayoutAppearance.selected.iconColor = UIColor.systemGreen
+        appearance.compactInlineLayoutAppearance.selected.titleTextAttributes = [.foregroundColor: UIColor.systemGreen, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
         
         // Unselected state - gray
         appearance.stackedLayoutAppearance.normal.iconColor = .gray
-        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        appearance.stackedLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
         appearance.inlineLayoutAppearance.normal.iconColor = .gray
-        appearance.inlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        appearance.inlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
         appearance.compactInlineLayoutAppearance.normal.iconColor = .gray
-        appearance.compactInlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray]
+        appearance.compactInlineLayoutAppearance.normal.titleTextAttributes = [.foregroundColor: UIColor.gray, .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)]
         
         // Apply the appearance
         UITabBar.appearance().standardAppearance = appearance
@@ -60,71 +95,76 @@ struct ContentView: View {
             if isLoading {
                 LoadingView()
             } else if authManager.isAuthenticated {
-                TabView(selection: $selectedTab) {
-                    NavigationStack {
-                        ArchiveTabView()
+                ZStack(alignment: .top) {
+                    TabView(selection: $selectedTab) {
+                        NavigationStack {
+                            ArchiveTabView()
+                                .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "tv")
+                            Text("Archive")
+                        }
+                        .tag(0)
+                        
+                        NavigationStack {
+                            VideoFeedView(scrollToTop: $scrollToTop)
+                                .environmentObject(feedViewModel)
+                                .navigationBarTitleDisplayMode(.inline)
+                                .toolbarBackground(.visible, for: .navigationBar)
+                                .toolbarBackground(Color.black, for: .navigationBar)
+                        }
+                        .tabItem {
+                            Image(systemName: "house.fill")
+                            Text("Home")
+                        }
+                        .tag(1)
+                        
+                        NavigationStack {
+                            HashtagSearchView()
+                                .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "magnifyingglass")
+                            Text("Search")
+                        }
+                        .tag(2)
+                        
+                        NavigationStack {
+                            WalletView()
+                        }
+                        .tabItem {
+                            Image(systemName: "dollarsign.circle.fill")
+                            Text("Wallet")
+                        }
+                        .tag(3)
+                        
+                        NavigationStack {
+                            VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
+                                switchToTab(0)  // Switch to home tab
+                                scrollToTop = true  // Trigger scroll to top
+                            })
                             .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "plus.square.fill")
+                            Text("Upload")
+                        }
+                        .tag(4)
+                        
+                        NavigationStack {
+                            ProfileView()
+                                .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "person.fill")
+                            Text("Profile")
+                        }
+                        .tag(5)
                     }
-                    .tabItem {
-                        Image(systemName: "film.stack")
-                        Text("Archive")
-                    }
-                    .tag(0)
+                    .accentColor(.green)
                     
-                    NavigationStack {
-                        VideoFeedView(scrollToTop: $scrollToTop)
-                            .environmentObject(feedViewModel)
-                            .navigationBarTitleDisplayMode(.inline)
-                            .toolbarBackground(.visible, for: .navigationBar)
-                            .toolbarBackground(Color.black, for: .navigationBar)
-                    }
-                    .tabItem {
-                        Image(systemName: "house.fill")
-                        Text("Home")
-                    }
-                    .tag(1)
-                    
-                    NavigationStack {
-                        HashtagSearchView()
-                            .environmentObject(feedViewModel)
-                    }
-                    .tabItem {
-                        Image(systemName: "magnifyingglass")
-                        Text("Search")
-                    }
-                    .tag(2)
-                    
-                    NavigationStack {
-                        WalletView()
-                    }
-                    .tabItem {
-                        Image(systemName: "dollarsign.circle.fill")
-                        Text("Wallet")
-                    }
-                    .tag(3)
-                    
-                    NavigationStack {
-                        VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
-                            switchToTab(0)  // Switch to home tab
-                            scrollToTop = true  // Trigger scroll to top
-                        })
-                        .environmentObject(feedViewModel)
-                    }
-                    .tabItem {
-                        Image(systemName: "plus.square.fill")
-                        Text("Upload")
-                    }
-                    .tag(4)
-                    
-                    NavigationStack {
-                        ProfileView()
-                            .environmentObject(feedViewModel)
-                    }
-                    .tabItem {
-                        Image(systemName: "person.fill")
-                        Text("Profile")
-                    }
-                    .tag(5)
+                    // Remove RetroStatusBar from here since it's now in VideoPlayerView
                 }
             } else {
                 LoginView()
@@ -135,6 +175,7 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             isLoading = false
         }
+        .statusBar(hidden: true) // Hide system status bar
     }
 }
 
