@@ -408,6 +408,23 @@ struct VideoControlButtons: View {
     }
 }
 
+// Helper function to clean HTML tags
+private func cleanHTMLTags(_ text: String) -> String {
+    // Remove HTML tags using regular expressions
+    let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: .caseInsensitive)
+    let range = NSRange(location: 0, length: text.utf16.count)
+    let cleanedText = regex?.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+    
+    // Decode HTML entities and return cleaned text
+    return cleanedText?
+        .replacingOccurrences(of: "&amp;", with: "&")
+        .replacingOccurrences(of: "&lt;", with: "<")
+        .replacingOccurrences(of: "&gt;", with: ">")
+        .replacingOccurrences(of: "&quot;", with: "\"")
+        .replacingOccurrences(of: "&#39;", with: "'")
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? text
+}
+
 // Video Info Section
 struct VideoInfoSection: View {
     let video: Video
@@ -426,8 +443,8 @@ struct VideoInfoSection: View {
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             RetroVideoInfo(
-                title: video.caption,
-                description: video.description,
+                title: video.caption.cleaningHTMLTags(),
+                description: (video.description ?? "").cleaningHTMLTags(),
                 hashtags: video.hashtags,
                 creator: creator,
                 showCreator: true

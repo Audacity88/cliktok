@@ -131,6 +131,19 @@ struct VideoThumbnailView: View {
                 .foregroundColor(.white)
                 .font(.title2)
                 .shadow(radius: 2)
+            
+            // Caption overlay at the bottom
+            VStack {
+                Spacer()
+                Text(video.caption.cleaningHTMLTags())
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.5))
+            }
         }
     }
 }
