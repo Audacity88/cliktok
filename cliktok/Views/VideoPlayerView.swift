@@ -93,16 +93,16 @@ actor VideoAssetLoader {
     
     private func loadInitialMetadata(for asset: AVURLAsset) async throws {
         print("VideoAssetLoader: Loading essential metadata")
-        // Load essential properties to ensure valid playback
+        // Load only essential properties without preparing for playback
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                // Load tracks first
+                // Only load tracks info without preparing them
                 let tracks = try await asset.load(.tracks)
                 guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
                     throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No video track found"])
                 }
                 
-                // Load essential video track properties
+                // Only load format descriptions without preparing the track
                 let descriptions = try await videoTrack.load(.formatDescriptions)
                 guard !descriptions.isEmpty else {
                     throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No format descriptions found"])
@@ -167,8 +167,11 @@ actor VideoAssetLoader {
                     print("VideoAssetLoader: Successfully prefetched \(data.count) bytes")
                 } else {
                     print("VideoAssetLoader: Server doesn't support range requests, falling back")
-                    // Create and cache the full asset
-                    _ = try await loadAsset(for: url)
+                    // Create and cache the full asset but don't prepare it for playback
+                    let asset = AVURLAsset(url: url)
+                    // Only load essential metadata without preparing for playback
+                    try await loadInitialMetadata(for: asset)
+                    assetCache.setObject(asset, forKey: url as NSURL)
                 }
             } catch {
                 print("VideoAssetLoader: Prefetch failed for \(url): \(error.localizedDescription)")
