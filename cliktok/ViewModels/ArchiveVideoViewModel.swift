@@ -88,21 +88,21 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     private func prefetchCollections(_ collections: [ArchiveCollection]) async {
-        for collection in collections {
+        // Only prefetch first 3 collections
+        for collection in collections.prefix(3) {
             // Don't prefetch test videos
             guard collection.id != "test_videos" else { continue }
             
             prefetchTasks[collection.id]?.cancel()
             let task = Task {
                 do {
-                    print("Prefetching videos for collection: \(collection.id)")
                     let videos = try await api.fetchCollectionItems(
                         identifier: collection.id,
                         offset: 0,
                         limit: pageSize
                     )
                     
-                    // Cache the videos
+                    // Cache the videos metadata only
                     await MainActor.run {
                         if let index = self.collections.firstIndex(where: { $0.id == collection.id }) {
                             var updatedCollection = self.collections[index]
@@ -116,24 +116,12 @@ class ArchiveVideoViewModel: ObservableObject {
                         }
                     }
                     
-                    // Prefetch video assets and thumbnails in parallel
-                    await withTaskGroup(of: Void.self) { group in
-                        // Prefetch first 3 video assets
-                        for video in videos.prefix(3) {
-                            group.addTask {
-                                if let url = URL(string: video.videoURL) {
-                                    await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .low)
-                                }
-                            }
+                    // Only prefetch thumbnails, no video assets
+                    Task {
+                        let thumbnailURLs = videos.compactMap { video in
+                            URL(string: InternetArchiveAPI.getThumbnailURL(identifier: video.id).absoluteString)
                         }
-                        
-                        // Prefetch thumbnails
-                        group.addTask {
-                            let thumbnailURLs = videos.compactMap { video in
-                                URL(string: InternetArchiveAPI.getThumbnailURL(identifier: video.id).absoluteString)
-                            }
-                            await ImageCache.shared.prefetchImages(thumbnailURLs)
-                        }
+                        await ImageCache.shared.prefetchImages(thumbnailURLs)
                     }
                     
                 } catch {
@@ -151,6 +139,9 @@ class ArchiveVideoViewModel: ObservableObject {
         isLoading = true
         error = nil
         hasMoreVideos = true
+        
+        // Clear all caches when switching collections
+        clearCaches()
         
         // If we already have videos for this collection, use them
         if let existingCollection = collections.first(where: { $0.id == collection.id }),
@@ -174,13 +165,31 @@ class ArchiveVideoViewModel: ObservableObject {
         // Cancel any existing prefetch task
         prefetchTasks[collection.id]?.cancel()
         
-        // Load initial page
-        await loadMoreVideos(for: collection, startIndex: 0)
+        do {
+            // Load initial page
+            try await loadMoreVideos(for: collection, startIndex: 0)
+        } catch {
+            self.error = "Failed to load videos: \(error.localizedDescription)"
+            print("Error loading collection: \(error)")
+        }
         
         isLoading = false
     }
     
-    private func loadMoreVideos(for collection: ArchiveCollection, startIndex: Int) async {
+    private func clearCaches() {
+        // Clear view model caches
+        videoCache.removeAll()
+        loadedRanges.removeAll()
+        prefetchTasks.forEach { $0.value.cancel() }
+        prefetchTasks.removeAll()
+        
+        // Clear API caches
+        Task {
+            await api.clearCaches()
+        }
+    }
+    
+    private func loadMoreVideos(for collection: ArchiveCollection, startIndex: Int) async throws {
         guard !isLoadingMore else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
@@ -195,80 +204,41 @@ class ArchiveVideoViewModel: ObservableObject {
             (startIndex + pageSize)..<(startIndex + (pageSize * 2)) :
             (startIndex - pageSize)..<startIndex
         
-        // Check cache first
-        if let cachedVideos = videoCache[collection.id]?.prefix(primaryRange.count) {
-            await updateCollectionVideos(collection, videos: Array(cachedVideos), range: primaryRange)
-            return
-        }
-        
         // Load primary and prefetch ranges in parallel
-        await withTaskGroup(of: (Range<Int>, [ArchiveVideo]).self) { group in
-            // Primary range task
-            group.addTask {
-                do {
-                    print("Loading primary range \(primaryRange) for collection \(collection.id)")
-                    let videos = try await self.api.fetchCollectionItems(
-                        identifier: collection.id,
-                        offset: primaryRange.lowerBound,
-                        limit: self.pageSize
-                    )
-                    return (primaryRange, videos)
-                } catch {
-                    print("Error loading primary range: \(error)")
-                    return (primaryRange, [])
-                }
-            }
+        do {
+            let videos = try await api.fetchCollectionItems(
+                identifier: collection.id,
+                offset: primaryRange.lowerBound,
+                limit: pageSize
+            )
             
-            // Prefetch range task
-            if prefetchRange.lowerBound >= 0 {
-                group.addTask {
-                    do {
-                        print("Prefetching range \(prefetchRange) for collection \(collection.id)")
-                        let videos = try await self.api.fetchCollectionItems(
-                            identifier: collection.id,
-                            offset: prefetchRange.lowerBound,
-                            limit: self.pageSize
-                        )
-                        return (prefetchRange, videos)
-                    } catch {
-                        print("Error prefetching range: \(error)")
-                        return (prefetchRange, [])
-                    }
-                }
-            }
-            
-            // Process results
-            var newVideos: [(Range<Int>, [ArchiveVideo])] = []
-            for await result in group {
-                newVideos.append(result)
+            if videos.isEmpty {
+                hasMoreVideos = false
+                return
             }
             
             // Update collection with loaded videos
-            for (range, videos) in newVideos {
-                if !videos.isEmpty {
-                    // Cache the videos
-                    var existingCache = self.videoCache[collection.id] ?? []
-                    let maxCacheSize = 100
-                    if existingCache.count > maxCacheSize {
-                        existingCache.removeFirst(existingCache.count - maxCacheSize)
-                    }
-                    existingCache.append(contentsOf: videos)
-                    self.videoCache[collection.id] = existingCache
-                    
-                    // Update collection
-                    await updateCollectionVideos(collection, videos: videos, range: range)
-                    
-                    // Prefetch assets for the primary range only
-                    if range == primaryRange {
-                        await prefetchAssetsForVideos(videos.prefix(3))
+            await updateCollectionVideos(collection, videos: videos, range: primaryRange)
+            
+            // Prefetch next page if available
+            if hasMoreVideos && prefetchRange.lowerBound >= 0 {
+                Task {
+                    do {
+                        let prefetchedVideos = try await api.fetchCollectionItems(
+                            identifier: collection.id,
+                            offset: prefetchRange.lowerBound,
+                            limit: pageSize
+                        )
+                        if !prefetchedVideos.isEmpty {
+                            await updateCollectionVideos(collection, videos: prefetchedVideos, range: prefetchRange)
+                        }
+                    } catch {
+                        print("Error prefetching next page: \(error)")
                     }
                 }
             }
-        }
-        
-        // Update hasMoreVideos flag
-        if let loadedVideos = collections.first(where: { $0.id == collection.id })?.videos {
-            hasMoreVideos = loadedVideos.count % pageSize == 0
+        } catch {
+            throw error
         }
     }
     
@@ -337,11 +307,15 @@ class ArchiveVideoViewModel: ObservableObject {
         
         if isNearEnd || isNearStart {
             let startIndex = isNearEnd ? collection.videos.count : max(0, currentIndex - pageSize)
-            print("ArchiveVideoViewModel: Loading more videos starting at index \(startIndex)")
             isLoading = true
             defer { isLoading = false }
             
-            await loadMoreVideos(for: collection, startIndex: startIndex)
+            do {
+                try await loadMoreVideos(for: collection, startIndex: startIndex)
+            } catch {
+                self.error = "Failed to load more videos: \(error.localizedDescription)"
+                print("Error loading more videos: \(error)")
+            }
         }
     }
 }

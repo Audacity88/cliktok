@@ -203,23 +203,8 @@ class TipViewModel: ObservableObject {
                 .whereField("senderID", isEqualTo: userId)
                 .getDocuments()
             
-            self.sentTips = sentSnapshot.documents.compactMap { document in
-                guard let amount = document.data()["amount"] as? Double,
-                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
-                      let videoID = document.data()["videoID"] as? String,
-                      let senderID = document.data()["senderID"] as? String,
-                      let receiverID = document.data()["receiverID"] as? String,
-                      let transactionID = document.data()["transactionID"] as? String else {
-                    return nil
-                }
-                
-                return Tip(id: document.documentID,
-                          amount: amount,
-                          timestamp: timestamp,
-                          videoID: videoID,
-                          senderID: senderID,
-                          receiverID: receiverID,
-                          transactionID: transactionID)
+            self.sentTips = try sentSnapshot.documents.compactMap { document in
+                try document.data(as: Tip.self)
             }
             
             // Load received tips
@@ -227,27 +212,9 @@ class TipViewModel: ObservableObject {
                 .whereField("receiverID", isEqualTo: userId)
                 .getDocuments()
             
-            self.receivedTips = receivedSnapshot.documents.compactMap { document in
-                guard let amount = document.data()["amount"] as? Double,
-                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
-                      let videoID = document.data()["videoID"] as? String,
-                      let senderID = document.data()["senderID"] as? String,
-                      let receiverID = document.data()["receiverID"] as? String,
-                      let transactionID = document.data()["transactionID"] as? String else {
-                    return nil
-                }
-                
-                return Tip(id: document.documentID,
-                          amount: amount,
-                          timestamp: timestamp,
-                          videoID: videoID,
-                          senderID: senderID,
-                          receiverID: receiverID,
-                          transactionID: transactionID)
+            self.receivedTips = try receivedSnapshot.documents.compactMap { document in
+                try document.data(as: Tip.self)
             }
-            
-            // Remove unnecessary balance load in development mode
-            // The balance is already handled in processTip
             
         } catch {
             print("Error loading tip history: \(error)")
@@ -311,7 +278,6 @@ class TipViewModel: ObservableObject {
         
         // Create tip record
         let tip = Tip(
-            id: UUID().uuidString,
             amount: amount,
             timestamp: Date(),
             videoID: videoID,
@@ -321,15 +287,9 @@ class TipViewModel: ObservableObject {
         )
         
         do {
-            // Store tip in Firestore
-            try await db.collection("tips").document(tip.id).setData([
-                "amount": tip.amount,
-                "timestamp": tip.timestamp,
-                "videoID": tip.videoID,
-                "senderID": tip.senderID,
-                "receiverID": tip.receiverID,
-                "transactionID": tip.transactionID
-            ])
+            // Store tip in Firestore using Codable
+            let tipRef = db.collection("tips").document()
+            try tipRef.setData(from: tip)
             
             // Update balance
             balance -= amount
@@ -340,7 +300,7 @@ class TipViewModel: ObservableObject {
                 newBalance: balance,
                 reason: "Tip Sent",
                 details: [
-                    "tipId": tip.id,
+                    "tipId": tipRef.documentID,
                     "videoId": videoID,
                     "receiverId": receiverID
                 ]
@@ -355,7 +315,6 @@ class TipViewModel: ObservableObject {
         }
     }
     
-    // New method that loads tip history without affecting balance
     private func loadTipHistoryWithoutBalance() async {
         guard let userId = AuthenticationManager.shared.currentUser?.uid else { return }
         
@@ -365,23 +324,8 @@ class TipViewModel: ObservableObject {
                 .whereField("senderID", isEqualTo: userId)
                 .getDocuments()
             
-            self.sentTips = sentSnapshot.documents.compactMap { document in
-                guard let amount = document.data()["amount"] as? Double,
-                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
-                      let videoID = document.data()["videoID"] as? String,
-                      let senderID = document.data()["senderID"] as? String,
-                      let receiverID = document.data()["receiverID"] as? String,
-                      let transactionID = document.data()["transactionID"] as? String else {
-                    return nil
-                }
-                
-                return Tip(id: document.documentID,
-                          amount: amount,
-                          timestamp: timestamp,
-                          videoID: videoID,
-                          senderID: senderID,
-                          receiverID: receiverID,
-                          transactionID: transactionID)
+            self.sentTips = try sentSnapshot.documents.compactMap { document in
+                try document.data(as: Tip.self)
             }
             
             // Load received tips
@@ -389,23 +333,8 @@ class TipViewModel: ObservableObject {
                 .whereField("receiverID", isEqualTo: userId)
                 .getDocuments()
             
-            self.receivedTips = receivedSnapshot.documents.compactMap { document in
-                guard let amount = document.data()["amount"] as? Double,
-                      let timestamp = (document.data()["timestamp"] as? Timestamp)?.dateValue(),
-                      let videoID = document.data()["videoID"] as? String,
-                      let senderID = document.data()["senderID"] as? String,
-                      let receiverID = document.data()["receiverID"] as? String,
-                      let transactionID = document.data()["transactionID"] as? String else {
-                    return nil
-                }
-                
-                return Tip(id: document.documentID,
-                          amount: amount,
-                          timestamp: timestamp,
-                          videoID: videoID,
-                          senderID: senderID,
-                          receiverID: receiverID,
-                          transactionID: transactionID)
+            self.receivedTips = try receivedSnapshot.documents.compactMap { document in
+                try document.data(as: Tip.self)
             }
         } catch {
             print("Error loading tip history: \(error)")

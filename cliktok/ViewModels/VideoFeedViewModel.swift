@@ -151,7 +151,20 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func updateVideoStats(video: Video, liked: Bool? = nil, viewed: Bool = true) async {
-        guard let id = video.id else { return }
+        // For archive videos, use the archive identifier
+        let documentId: String
+        if video.userID == "archive_user" {
+            if let archiveId = video.archiveIdentifier {
+                documentId = archiveId
+            } else if let id = video.id {
+                documentId = id.replacingOccurrences(of: "archive_", with: "")
+            } else {
+                return
+            }
+        } else {
+            guard let id = video.id else { return }
+            documentId = id
+        }
         
         do {
             var updates: [String: Any] = [:]
@@ -159,10 +172,10 @@ class VideoFeedViewModel: ObservableObject {
             if viewed {
                 updates["views"] = FieldValue.increment(Int64(1))
                 // Update local video object
-                if let index = videos.firstIndex(where: { $0.id == id }) {
+                if let index = videos.firstIndex(where: { $0.id == video.id }) {
                     videos[index].views += 1
                 }
-                if let index = searchResults.firstIndex(where: { $0.id == id }) {
+                if let index = searchResults.firstIndex(where: { $0.id == video.id }) {
                     searchResults[index].views += 1
                 }
             }
@@ -172,18 +185,24 @@ class VideoFeedViewModel: ObservableObject {
             }
             
             if !updates.isEmpty {
-                print("Updating video stats for \(id) with updates: \(updates)")
+                print("Updating video stats for \(documentId) with updates: \(updates)")
                 
                 // Use different collection based on video type
                 let collectionPath = video.userID == "archive_user" ? "archive_video_stats" : "videos"
                 
                 if video.userID == "archive_user" {
                     // For archive videos, create or update the stats document
-                    let statsRef = db.collection(collectionPath).document(id)
-                    try await statsRef.setData(updates, merge: true)
+                    let statsRef = db.collection(collectionPath).document(documentId)
+                    // First check if document exists
+                    let docSnapshot = try await statsRef.getDocument()
+                    if docSnapshot.exists {
+                        try await statsRef.updateData(updates)
+                    } else {
+                        try await statsRef.setData(updates)
+                    }
                 } else {
                     // For regular videos, update the video document
-                    try await db.collection(collectionPath).document(id).updateData(updates)
+                    try await db.collection(collectionPath).document(documentId).updateData(updates)
                 }
                 
                 print("Successfully updated video stats")
@@ -265,46 +284,81 @@ class VideoFeedViewModel: ObservableObject {
                 dict[doc.documentID] = doc.data()
             }
             
-            return searchResponse.response.docs.compactMap { doc in
-                // Get the thumbnail URL
-                let thumbnailURL = InternetArchiveAPI.getThumbnailURL(identifier: doc.identifier).absoluteString
+            // Process videos in parallel using TaskGroup
+            return try await withThrowingTaskGroup(of: Video?.self) { group in
+                var videos: [Video] = []
                 
-                // Try different video formats in order of preference
-                let possibleFilenames = [
-                    "\(doc.identifier)_512kb.mp4",
-                    "\(doc.identifier).mp4",
-                    "\(doc.identifier)_h264.mp4"
-                ]
-                
-                let videoURL = possibleFilenames
-                    .map { InternetArchiveAPI.getVideoURL(identifier: doc.identifier, filename: $0) }
-                    .first?
-                    .absoluteString ?? ""
-                
-                guard !videoURL.isEmpty else {
-                    print("No valid video URL found for \(doc.identifier)")
-                    return nil
+                // Add tasks for each search result
+                for doc in searchResponse.response.docs {
+                    group.addTask {
+                        // Get the thumbnail URL
+                        let thumbnailURL = InternetArchiveAPI.getThumbnailURL(identifier: doc.identifier).absoluteString
+                        
+                        // Get the actual video URL by checking the file list
+                        let videoURL = try await InternetArchiveAPI.getActualVideoURL(identifier: doc.identifier)
+                        
+                        // Get stats for this video
+                        let videoStats = stats[doc.identifier]
+                        
+                        // Safely convert stats to Int, handling any numeric type from Firestore
+                        let views: Int
+                        if let viewsValue = videoStats?["views"] {
+                            switch viewsValue {
+                            case let intValue as Int:
+                                views = intValue
+                            case let longValue as Int64:
+                                views = Int(longValue)
+                            case let doubleValue as Double:
+                                views = Int(doubleValue)
+                            default:
+                                views = 0
+                            }
+                        } else {
+                            views = 0
+                        }
+                        
+                        let likes: Int
+                        if let likesValue = videoStats?["likes"] {
+                            switch likesValue {
+                            case let intValue as Int:
+                                likes = intValue
+                            case let longValue as Int64:
+                                likes = Int(longValue)
+                            case let doubleValue as Double:
+                                likes = Int(doubleValue)
+                            default:
+                                likes = 0
+                            }
+                        } else {
+                            likes = 0
+                        }
+                        
+                        print("Created archive video: \(doc.title ?? "Untitled") with URL: \(videoURL), views: \(views), likes: \(likes)")
+                        
+                        return Video(
+                            id: "archive_\(doc.identifier)",
+                            archiveIdentifier: doc.identifier,
+                            userID: "archive_user",
+                            videoURL: videoURL,
+                            thumbnailURL: thumbnailURL,
+                            caption: doc.title ?? "Untitled",
+                            description: doc.description,
+                            hashtags: ["archive"],
+                            createdAt: Date(),
+                            likes: likes,
+                            views: views
+                        )
+                    }
                 }
                 
-                // Get stats for this video
-                let videoStats = stats[doc.identifier]
-                let views = (videoStats?["views"] as? Int) ?? 0
-                let likes = (videoStats?["likes"] as? Int) ?? 0
+                // Collect results
+                for try await video in group {
+                    if let video = video {
+                        videos.append(video)
+                    }
+                }
                 
-                print("Created archive video: \(doc.title ?? "Untitled") with URL: \(videoURL)")
-                
-                return Video(
-                    id: doc.identifier,
-                    userID: "archive_user",
-                    videoURL: videoURL,
-                    thumbnailURL: thumbnailURL,
-                    caption: doc.title ?? "Untitled",
-                    description: doc.description,
-                    hashtags: ["archive"],
-                    createdAt: Date(),
-                    likes: likes,
-                    views: views
-                )
+                return videos
             }
             
         } catch {

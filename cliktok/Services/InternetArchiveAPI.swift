@@ -126,44 +126,68 @@ struct ArchiveSearchResponse: Codable {
 extension InternetArchiveAPI {
     static let baseURL = "https://archive.org"
     
-    static func getVideoURL(identifier: String, filename: String) -> URL {
-        // First try to get a streaming URL using the serve path
-        let encodedFilename = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
-        let serveURL = URL(string: "\(baseURL)/serve/\(identifier)/\(encodedFilename)")!
+    static func getVideoURL(identifier: String) -> String {
+        // Instead of returning a default URL format, we should try to get the actual URL
+        // But since this is a static function, we can't use async/await here
+        // So we'll still return the default format, but the caller should use getActualVideoURL instead
+        print("Warning: Using default video URL format for \(identifier). Consider using getActualVideoURL instead.")
+        return "https://archive.org/download/\(identifier)/\(identifier)_512kb.mp4"
+    }
+    
+    static func getActualVideoURL(identifier: String) async throws -> String {
+        // Fetch metadata to get actual file list
+        let url = URL(string: "\(baseURL)/metadata/\(identifier)")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let metadata = try JSONDecoder().decode(InternetArchiveMetadata.self, from: data)
         
-        // For certain formats, try to get an alternative streaming URL
-        if filename.hasSuffix(".m4v") {
-            // Try mp4 version first
-            let mp4Filename = filename.replacingOccurrences(of: ".m4v", with: ".mp4")
-            return URL(string: "\(baseURL)/serve/\(identifier)/\(mp4Filename)")!
+        // Look for video files in order of preference
+        let videoFiles = metadata.files.filter { file in
+            let name = file.name.lowercased()
+            return name.hasSuffix(".mp4") || name.hasSuffix(".m4v") || 
+                   name.hasSuffix(".mov") || name.contains("512kb")
         }
         
-        // For older formats, try to get the streaming version
-        if filename.hasSuffix(".avi") || filename.hasSuffix(".rm") || filename.hasSuffix(".wmv") {
-            // Look for _512kb.mp4 version
-            let streamingFilename = filename.replacingOccurrences(
-                of: #"\.(?:avi|rm|wmv)$"#,
-                with: "_512kb.mp4",
-                options: .regularExpression
-            )
-            return URL(string: "\(baseURL)/serve/\(identifier)/\(streamingFilename)")!
-        }
-        
-        // Try alternative URL formats for problematic files
-        if filename.hasSuffix(".mp4") {
-            // Try with _512kb suffix first
-            let streamingFilename = filename.replacingOccurrences(of: ".mp4", with: "_512kb.mp4")
-            let streamingURL = URL(string: "\(baseURL)/serve/\(identifier)/\(streamingFilename)")!
+        // Sort by preference: 512kb.mp4 first, then other mp4s
+        let sortedFiles = videoFiles.sorted { file1, file2 in
+            let name1 = file1.name.lowercased()
+            let name2 = file2.name.lowercased()
             
-            // Try with h264 suffix as fallback
-            let h264Filename = filename.replacingOccurrences(of: ".mp4", with: "_h264.mp4")
-            let h264URL = URL(string: "\(baseURL)/serve/\(identifier)/\(h264Filename)")!
+            // Prefer 512kb versions
+            if name1.contains("512kb") && !name2.contains("512kb") {
+                return true
+            }
+            if !name1.contains("512kb") && name2.contains("512kb") {
+                return false
+            }
             
-            // Return the first valid URL
-            return serveURL
+            // Then prefer mp4
+            if name1.hasSuffix(".mp4") && !name2.hasSuffix(".mp4") {
+                return true
+            }
+            if !name1.hasSuffix(".mp4") && name2.hasSuffix(".mp4") {
+                return false
+            }
+            
+            // Finally sort by size if available
+            if let size1 = Int(file1.size ?? "0"),
+               let size2 = Int(file2.size ?? "0") {
+                return size1 > size2 // Prefer larger files
+            }
+            
+            return false
         }
         
-        return serveURL
+        // Use the best matching file or fall back to default
+        if let bestFile = sortedFiles.first {
+            let videoURL = "https://archive.org/download/\(identifier)/\(bestFile.name)"
+            print("Found actual video URL: \(videoURL)")
+            return videoURL
+        }
+        
+        // If no suitable files found, throw an error instead of using default URL
+        throw NSError(domain: "InternetArchive", code: 404, userInfo: [
+            NSLocalizedDescriptionKey: "No suitable video file found for identifier: \(identifier)"
+        ])
     }
     
     static func getThumbnailURL(identifier: String) -> URL {
@@ -179,6 +203,11 @@ actor InternetArchiveAPI {
     private var videoCache: [String: [ArchiveVideo]] = [:]
     
     private init() {}
+    
+    func clearCaches() {
+        metadataCache.removeAll()
+        videoCache.removeAll()
+    }
     
     func fetchCollectionItems(identifier: String, offset: Int = 0, limit: Int = 5) async throws -> [ArchiveVideo] {
         print("InternetArchiveAPI: Searching for items in collection: \(identifier) with offset: \(offset), limit: \(limit)")
@@ -286,9 +315,6 @@ actor InternetArchiveAPI {
     }
     
     private func getVideoFiles(from metadata: InternetArchiveMetadata) -> [ArchiveVideo] {
-        print("InternetArchiveAPI: Processing files for \(metadata.metadata.identifier)")
-        print("InternetArchiveAPI: Total files found: \(metadata.files.count)")
-        
         // First pass: collect all video files and check for MP4 versions
         var videoMap: [String: [(InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)]] = [:]
         
@@ -304,9 +330,6 @@ actor InternetArchiveAPI {
         ]
         
         for file in metadata.files {
-            // Debug print file info
-            print("InternetArchiveAPI: Checking file: \(file.name), format: \(file.format ?? "nil")")
-            
             // Skip files that are clearly derivatives or thumbnails
             if file.name.contains("_thumb") || file.name.contains("_small") || 
                file.name.contains("_preview") || file.name.contains(".gif") ||
@@ -316,19 +339,16 @@ actor InternetArchiveAPI {
                file.name.contains("_archive") || file.name.contains("_files") ||
                file.name.contains("_meta.xml") || file.name.contains(".sqlite") ||
                file.name.contains(".torrent") || file.name.contains("__ia_thumb") {
-                print("InternetArchiveAPI: Skipping derivative file: \(file.name)")
                 continue
             }
             
             // Skip very small files (likely thumbnails or previews)
             if let size = file.size, let sizeInt = Int(size), sizeInt < 1000000 {
-                print("InternetArchiveAPI: Skipping small file: \(file.name) (\(size) bytes)")
                 continue
             }
             
             // Skip files marked as derivatives
             if file.source?.lowercased() == "derivative" {
-                print("InternetArchiveAPI: Skipping derivative source file: \(file.name)")
                 continue
             }
             
@@ -354,11 +374,8 @@ actor InternetArchiveAPI {
                 }
                 
                 videoMap[key]?.append((file, format))
-                print("InternetArchiveAPI: Added video file: \(file.name) with priority \(priority)")
             }
         }
-        
-        print("InternetArchiveAPI: Found \(videoMap.count) potential videos")
         
         // Second pass: select best format for each video
         var bestFormatVideos: [ArchiveVideo] = []
@@ -387,25 +404,19 @@ actor InternetArchiveAPI {
             
             if let bestVariant = sortedVariants.first {
                 let file = bestVariant.0
-                let videoURL = Self.getVideoURL(identifier: metadata.metadata.identifier, filename: file.name).absoluteString
+                let videoURL = Self.getVideoURL(identifier: metadata.metadata.identifier)
                 
                 let video = ArchiveVideo(
+                    archiveIdentifier: metadata.metadata.identifier,
                     title: file.title ?? metadata.metadata.title ?? file.name,
                     videoURL: videoURL,
                     description: file.description ?? metadata.metadata.description ?? ""
                 )
                 
-                print("InternetArchiveAPI: Created video: \(video.title) with URL: \(video.videoURL)")
                 bestFormatVideos.append(video)
             }
         }
         
-        print("InternetArchiveAPI: Found \(bestFormatVideos.count) videos in \(metadata.metadata.identifier)")
         return bestFormatVideos
-    }
-    
-    func clearCache() {
-        metadataCache.removeAll()
-        videoCache.removeAll()
     }
 }

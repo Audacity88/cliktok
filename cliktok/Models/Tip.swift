@@ -1,7 +1,8 @@
 import Foundation
+import FirebaseFirestore
 
-struct Tip: Identifiable {
-    let id: String
+struct Tip: Identifiable, Codable {
+    @DocumentID var id: String?
     let amount: Double
     let timestamp: Date
     let videoID: String
@@ -9,7 +10,17 @@ struct Tip: Identifiable {
     let receiverID: String
     let transactionID: String
     
-    init(id: String, amount: Double, timestamp: Date, videoID: String, senderID: String, receiverID: String, transactionID: String) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case amount
+        case timestamp
+        case videoID
+        case senderID
+        case receiverID
+        case transactionID
+    }
+    
+    init(id: String? = nil, amount: Double, timestamp: Date, videoID: String, senderID: String, receiverID: String, transactionID: String) {
         self.id = id
         self.amount = amount
         self.timestamp = timestamp

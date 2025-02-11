@@ -45,6 +45,20 @@ service cloud.firestore {
                           resource.data.user_id == request.auth.uid;
     }
     
+    // Archive video stats collection
+    match /archive_video_stats/{videoId} {
+      // Allow reading stats to anyone
+      allow read: if true;
+      
+      // Allow creating and updating view counts without auth
+      allow create: if true;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views']);
+      
+      // Allow updating likes with auth
+      allow update: if request.auth != null && 
+                   request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']);
+    }
+    
     // Allow any operation in development mode
     match /{document=**} {
       allow read, write: if isDevelopmentMode();

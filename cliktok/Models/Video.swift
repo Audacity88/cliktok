@@ -3,6 +3,7 @@ import FirebaseFirestore
 
 struct Video: Identifiable, Codable {
     @DocumentID var id: String?
+    let archiveIdentifier: String?
     let userID: String
     let videoURL: String
     let thumbnailURL: String?
@@ -16,6 +17,7 @@ struct Video: Identifiable, Codable {
     
     enum CodingKeys: String, CodingKey {
         case id
+        case archiveIdentifier
         case userID = "user_id"
         case videoURL = "video_url"
         case thumbnailURL = "thumbnail_url"
@@ -29,17 +31,19 @@ struct Video: Identifiable, Codable {
     }
     
     init(id: String? = nil,
+         archiveIdentifier: String? = nil,
          userID: String,
          videoURL: String,
          thumbnailURL: String? = nil,
          caption: String,
          description: String? = nil,
-         hashtags: [String],
+         hashtags: [String] = [],
          createdAt: Date = Date(),
          likes: Int = 0,
          views: Int = 0,
          isAdvertisement: Bool? = nil) {
         self.id = id
+        self.archiveIdentifier = archiveIdentifier
         self.userID = userID
         self.videoURL = videoURL
         self.thumbnailURL = thumbnailURL
