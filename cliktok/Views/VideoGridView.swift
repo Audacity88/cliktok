@@ -78,7 +78,7 @@ struct VideoGridView: View {
             }
         }
         .fullScreenCover(item: $selectedVideo) { video in
-            VerticalVideoPlayerView(
+            UnifiedVideoView(
                 videos: videos,
                 startingVideo: video,
                 showBackButton: true,

@@ -173,7 +173,19 @@ class VideoFeedViewModel: ObservableObject {
             
             if !updates.isEmpty {
                 print("Updating video stats for \(id) with updates: \(updates)")
-                try await db.collection("videos").document(id).updateData(updates)
+                
+                // Use different collection based on video type
+                let collectionPath = video.userID == "archive_user" ? "archive_video_stats" : "videos"
+                
+                if video.userID == "archive_user" {
+                    // For archive videos, create or update the stats document
+                    let statsRef = db.collection(collectionPath).document(id)
+                    try await statsRef.setData(updates, merge: true)
+                } else {
+                    // For regular videos, update the video document
+                    try await db.collection(collectionPath).document(id).updateData(updates)
+                }
+                
                 print("Successfully updated video stats")
             }
         } catch {
@@ -243,6 +255,16 @@ class VideoFeedViewModel: ObservableObject {
             
             print("Found \(searchResponse.response.docs.count) archive results")
             
+            // Fetch stats for all archive videos in parallel
+            async let statsSnapshots = db.collection("archive_video_stats")
+                .whereField(FieldPath.documentID(), in: searchResponse.response.docs.map { $0.identifier })
+                .getDocuments()
+            
+            // Create a dictionary of video stats
+            let stats = try await statsSnapshots.documents.reduce(into: [String: [String: Any]]()) { dict, doc in
+                dict[doc.documentID] = doc.data()
+            }
+            
             return searchResponse.response.docs.compactMap { doc in
                 // Get the thumbnail URL
                 let thumbnailURL = InternetArchiveAPI.getThumbnailURL(identifier: doc.identifier).absoluteString
@@ -264,6 +286,11 @@ class VideoFeedViewModel: ObservableObject {
                     return nil
                 }
                 
+                // Get stats for this video
+                let videoStats = stats[doc.identifier]
+                let views = (videoStats?["views"] as? Int) ?? 0
+                let likes = (videoStats?["likes"] as? Int) ?? 0
+                
                 print("Created archive video: \(doc.title ?? "Untitled") with URL: \(videoURL)")
                 
                 return Video(
@@ -275,8 +302,8 @@ class VideoFeedViewModel: ObservableObject {
                     description: doc.description,
                     hashtags: ["archive"],
                     createdAt: Date(),
-                    likes: 0,
-                    views: 0
+                    likes: likes,
+                    views: views
                 )
             }
             

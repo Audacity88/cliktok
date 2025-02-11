@@ -8,6 +8,7 @@
 import SwiftUI
 import FirebaseCore
 import OSLog
+import StripePaymentSheet
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     private let logger = Logger(subsystem: "gauntletai.cliktok", category: "AppDelegate")
@@ -28,6 +29,13 @@ struct cliktokApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onOpenURL { url in
+                    // Handle Stripe return URL
+                    let stripeHandled = StripeAPI.handleURLCallback(with: url)
+                    if !stripeHandled {
+                        // Handle other URL schemes if needed
+                    }
+                }
         }
     }
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseFirestore
 import Foundation
+import StripePaymentSheet
 
 @MainActor
 class TipViewModel: ObservableObject {
@@ -14,14 +15,17 @@ class TipViewModel: ObservableObject {
     @Published var balance: Double = 0.0
     @Published var selectedAmount: Double?
     @Published var showSuccessAlert = false
+    @Published var paymentSheet: PaymentSheet?
+    @Published var isPaymentSheetPresented = false
     
     private let db = Firestore.firestore()
     private var hasInitialized = false
+    private let stripeService = StripeService.shared
     
     let tipAmounts = [1.00, 5.00, 10.00, 20.00]
     
     var isPurchasing: Bool {
-        false
+        isProcessing
     }
     
     private init() {
@@ -92,16 +96,73 @@ class TipViewModel: ObservableObject {
     
     @MainActor
     func addFunds(_ amount: Double) async throws {
-        let oldBalance = balance
+        isProcessing = true
+        defer { isProcessing = false }
         
-        print("Adding funds in development mode: \(amount)")
-        let decimalAmount = NSDecimalNumber(value: amount).decimalValue
-        // paymentManager.addTestMoney(amount: decimalAmount)
-        balance = getDevelopmentBalance()
-        logBalanceChange(oldBalance: oldBalance, 
-                       newBalance: balance, 
-                       reason: "Added Test Funds",
-                       details: ["requestedAmount": amount])
+        do {
+            let backendUrl = URL(string: "http://192.168.1.69:3000/create-payment-intent")!
+            
+            var request = URLRequest(url: backendUrl)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            
+            let body: [String: Any] = [
+                "amount": Int(amount * 100),
+                "currency": "usd"
+            ]
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            
+            let (data, _) = try await URLSession.shared.data(for: request)
+            
+            // Print the raw response for debugging
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("Server response: \(responseString)")
+            }
+            
+            guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                  let clientSecret = json["clientSecret"] as? String,
+                  let publishableKey = json["publishableKey"] as? String else {
+                throw NSError(domain: "PaymentError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"])
+            }
+            
+            // Update Stripe publishable key from server
+            StripeAPI.defaultPublishableKey = publishableKey
+            
+            // Configure payment sheet with minimal test settings
+            var configuration = PaymentSheet.Configuration()
+            configuration.merchantDisplayName = "ClikTok"
+            configuration.returnURL = "cliktok://stripe-redirect"
+            
+            paymentSheet = PaymentSheet(
+                paymentIntentClientSecret: clientSecret,
+                configuration: configuration
+            )
+            
+            isPaymentSheetPresented = true
+            
+        } catch {
+            print("Error: \(error)")
+            throw error
+        }
+    }
+    
+    func handlePaymentCompletion(_ result: PaymentSheetResult) async {
+        switch result {
+        case .completed:
+            print("Payment completed!")
+            await loadBalance()
+            showSuccessAlert = true
+            
+        case .canceled:
+            print("Payment canceled.")
+            errorMessage = "Payment was canceled"
+            showError = true
+            
+        case .failed(let error):
+            print("Payment failed: \(error.localizedDescription)")
+            errorMessage = error.localizedDescription
+            showError = true
+        }
     }
     
     @MainActor
@@ -227,17 +288,70 @@ class TipViewModel: ObservableObject {
         return 
     }
     
-    private func processTip(amount: Double, receiverID: String, videoID: String) async -> Bool {
-        isProcessing = true
-        defer { isProcessing = false }
+    private func processTip(amount: Double, receiverID: String, videoID: String) async throws {
+        guard let userId = AuthenticationManager.shared.currentUser?.uid else {
+            throw NSError(domain: "TipError", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
+        }
+        
+        // Check balance
+        guard amount <= balance else {
+            throw PaymentError.insufficientFunds
+        }
+        
+        let oldBalance = balance
+        
+        // Create transaction record
+        let transaction = Transaction(
+            userID: userId,
+            type: .tip,
+            amount: amount,
+            status: .completed,
+            description: "Tip for video \(videoID)"
+        )
+        
+        // Create tip record
+        let tip = Tip(
+            id: UUID().uuidString,
+            amount: amount,
+            timestamp: Date(),
+            videoID: videoID,
+            senderID: userId,
+            receiverID: receiverID,
+            transactionID: transaction.id
+        )
         
         do {
-            // TODO: Implement tipping without Stripe
-            return true
+            // Store tip in Firestore
+            try await db.collection("tips").document(tip.id).setData([
+                "amount": tip.amount,
+                "timestamp": tip.timestamp,
+                "videoID": tip.videoID,
+                "senderID": tip.senderID,
+                "receiverID": tip.receiverID,
+                "transactionID": tip.transactionID
+            ])
+            
+            // Update balance
+            balance -= amount
+            
+            // Log balance change
+            logBalanceChange(
+                oldBalance: oldBalance,
+                newBalance: balance,
+                reason: "Tip Sent",
+                details: [
+                    "tipId": tip.id,
+                    "videoId": videoID,
+                    "receiverId": receiverID
+                ]
+            )
+            
+            // Refresh tip history
+            await loadTipHistory()
         } catch {
-            errorMessage = error.localizedDescription
-            showError = true
-            return false
+            // Revert balance on failure
+            balance = oldBalance
+            throw error
         }
     }
     

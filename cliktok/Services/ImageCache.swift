@@ -29,33 +29,27 @@ actor ImageCache {
         
         // Check memory cache first
         if let cachedImage = memoryCache.object(forKey: key) {
-            print("ImageCache: Memory cache hit for \(url.lastPathComponent)")
             return cachedImage
         }
         
         // Check disk cache
         let diskURL = diskCacheURL(for: url)
         if let diskCachedImage = await loadImageFromDisk(url: diskURL) {
-            print("ImageCache: Disk cache hit for \(url.lastPathComponent)")
             memoryCache.setObject(diskCachedImage, forKey: key)
             return diskCachedImage
         }
         
         // Check if there's already a loading task
         if let existingTask = loadingTasks[url.absoluteString] {
-            print("ImageCache: Using existing loading task for \(url.lastPathComponent)")
             return try await existingTask.value
         }
         
         // Create new loading task
         let task = Task<UIImage?, Error> {
-            print("ImageCache: Loading image from \(url.lastPathComponent)")
-            
             let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad)
             let (data, _) = try await URLSession.shared.data(for: request)
             
             guard let image = UIImage(data: data) else {
-                print("ImageCache: Failed to create image from data for \(url.lastPathComponent)")
                 return nil
             }
             
@@ -63,9 +57,8 @@ actor ImageCache {
             try? await saveToDisk(image: image, url: diskURL)
             
             // Cache in memory
-            let cost = data.count
+            let cost = Int(image.size.width * image.size.height * 4)
             memoryCache.setObject(image, forKey: key, cost: cost)
-            print("ImageCache: Cached image for \(url.lastPathComponent) with cost \(cost) bytes")
             return image
         }
         

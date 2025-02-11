@@ -1,77 +1,84 @@
 import SwiftUI
 
 struct CachedAsyncImage<Content: View, Placeholder: View>: View {
-    let url: URL?
-    let scale: CGFloat
-    let animation: Animation?
-    let content: (Image) -> Content
-    let placeholder: () -> Placeholder
+    private let url: URL
+    private let scale: CGFloat
+    private let content: (Image) -> Content
+    private let placeholder: () -> Placeholder
     
-    @State private var cachedImage: Image? = nil
+    @State private var image: UIImage?
     @State private var isLoading = false
+    @State private var error: Error?
     
     init(
-        url: URL?,
+        url: URL,
         scale: CGFloat = 1.0,
-        animation: Animation? = .default,
         @ViewBuilder content: @escaping (Image) -> Content,
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {
         self.url = url
         self.scale = scale
-        self.animation = animation
         self.content = content
         self.placeholder = placeholder
     }
     
     var body: some View {
         Group {
-            if let image = cachedImage {
-                content(image)
+            if let image = image {
+                content(Image(uiImage: image))
+            } else if isLoading {
+                placeholder()
+            } else if error != nil {
+                placeholder()
             } else {
                 placeholder()
-                    .task(id: url) {
-                        await loadImage()
+                    .onAppear {
+                        loadImage()
                     }
             }
         }
     }
     
-    private func loadImage() async {
-        guard !isLoading, let url = url else { return }
-        isLoading = true
-        defer { isLoading = false }
+    private func loadImage() {
+        guard !isLoading else { return }
         
-        do {
-            if let image = try await Image.cached(url) {
-                if let animation = animation {
-                    withAnimation(animation) {
-                        cachedImage = image
-                    }
-                } else {
-                    cachedImage = image
+        isLoading = true
+        
+        Task {
+            do {
+                let loadedImage = try await ImageCacheManager.shared.loadImage(from: url)
+                await MainActor.run {
+                    self.image = loadedImage
+                    self.isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.error = error
+                    self.isLoading = false
                 }
             }
-        } catch {
-            print("CachedAsyncImage: Failed to load image from \(url): \(error)")
         }
     }
 }
 
-// Convenience initializer with default content transformation
-extension CachedAsyncImage where Content == Image {
+// Convenience initializers
+extension CachedAsyncImage {
     init(
-        url: URL?,
+        url: URL,
         scale: CGFloat = 1.0,
-        animation: Animation? = .default,
-        @ViewBuilder placeholder: @escaping () -> Placeholder
-    ) {
-        self.init(
-            url: url,
-            scale: scale,
-            animation: animation,
-            content: { $0 },
-            placeholder: placeholder
-        )
+        content: @escaping (Image) -> Content
+    ) where Placeholder == ProgressView<EmptyView, EmptyView> {
+        self.init(url: url, scale: scale, content: content) {
+            ProgressView()
+        }
+    }
+    
+    init(
+        url: URL,
+        scale: CGFloat = 1
+    ) where Content == Image, Placeholder == ProgressView<EmptyView, EmptyView> {
+        self.init(url: url, scale: scale, content: { $0 }) {
+            ProgressView()
+        }
     }
 } 

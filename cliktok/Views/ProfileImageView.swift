@@ -63,53 +63,26 @@ struct ProfileImageView: View {
     let imageURL: String?
     let size: CGFloat
     
-    @State private var image: UIImage?
-    @State private var isLoading = false
-    
     var body: some View {
-        Group {
-            if let image = image {
-                Image(uiImage: image)
+        if let urlString = imageURL, let url = URL(string: urlString) {
+            CachedAsyncImage(url: url) { image in
+                image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .frame(width: size, height: size)
                     .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
-            } else if isLoading {
-                ProgressView()
+            } placeholder: {
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
                     .frame(width: size, height: size)
-            } else {
-                Image(systemName: "person.circle.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: size, height: size)
-                    .foregroundColor(.gray)
+                    .overlay(ProgressView())
             }
-        }
-        .task(id: imageURL) {
-            await loadImage()
-        }
-    }
-    
-    private func loadImage() async {
-        guard let urlString = imageURL,
-              let url = URL(string: urlString) else {
-            return
-        }
-        
-        isLoading = true
-        
-        do {
-            let loadedImage = try await ImageLoader.shared.loadImage(from: url)
-            await MainActor.run {
-                self.image = loadedImage
-                self.isLoading = false
-            }
-        } catch {
-            print("Error loading profile image: \(error.localizedDescription)")
-            await MainActor.run {
-                self.isLoading = false
-            }
+        } else {
+            Image(systemName: "person.circle.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: size, height: size)
+                .foregroundColor(.gray)
         }
     }
 }

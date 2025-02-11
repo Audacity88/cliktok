@@ -97,8 +97,9 @@ struct ContentView: View {
             } else if authManager.isAuthenticated {
                 ZStack(alignment: .top) {
                     TabView(selection: $selectedTab) {
+                        // Archive Tab
                         NavigationStack {
-                            ArchiveTabView()
+                            UnifiedVideoView(mode: .archive)
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
@@ -107,12 +108,10 @@ struct ContentView: View {
                         }
                         .tag(0)
                         
+                        // Home Tab
                         NavigationStack {
-                            VideoFeedView(scrollToTop: $scrollToTop)
+                            UnifiedVideoView(mode: .feed)
                                 .environmentObject(feedViewModel)
-                                .navigationBarTitleDisplayMode(.inline)
-                                .toolbarBackground(.visible, for: .navigationBar)
-                                .toolbarBackground(Color.black, for: .navigationBar)
                         }
                         .tabItem {
                             Image(systemName: "house.fill")
@@ -120,6 +119,7 @@ struct ContentView: View {
                         }
                         .tag(1)
                         
+                        // Search Tab
                         NavigationStack {
                             HashtagSearchView()
                                 .environmentObject(feedViewModel)
@@ -130,6 +130,7 @@ struct ContentView: View {
                         }
                         .tag(2)
                         
+                        // Keep existing Wallet tab
                         NavigationStack {
                             WalletView()
                         }
@@ -139,10 +140,11 @@ struct ContentView: View {
                         }
                         .tag(3)
                         
+                        // Keep existing Upload tab
                         NavigationStack {
                             VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
-                                switchToTab(0)  // Switch to home tab
-                                scrollToTop = true  // Trigger scroll to top
+                                switchToTab(0)
+                                scrollToTop = true
                             })
                             .environmentObject(feedViewModel)
                         }
@@ -152,6 +154,7 @@ struct ContentView: View {
                         }
                         .tag(4)
                         
+                        // Keep existing Profile tab
                         NavigationStack {
                             ProfileView()
                                 .environmentObject(feedViewModel)
@@ -163,19 +166,16 @@ struct ContentView: View {
                         .tag(5)
                     }
                     .accentColor(.green)
-                    
-                    // Remove RetroStatusBar from here since it's now in VideoPlayerView
                 }
             } else {
                 LoginView()
             }
         }
         .task {
-            // Add a small delay to prevent flash of login screen
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            try? await Task.sleep(nanoseconds: 500_000_000)
             isLoading = false
         }
-        .statusBar(hidden: true) // Hide system status bar
+        .statusBar(hidden: true)
     }
 }
 

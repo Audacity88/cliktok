@@ -127,15 +127,15 @@ extension InternetArchiveAPI {
     static let baseURL = "https://archive.org"
     
     static func getVideoURL(identifier: String, filename: String) -> URL {
-        // First try to get a direct download URL
+        // First try to get a streaming URL using the serve path
         let encodedFilename = filename.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? filename
-        let directURL = URL(string: "\(baseURL)/download/\(identifier)/\(encodedFilename)")!
+        let serveURL = URL(string: "\(baseURL)/serve/\(identifier)/\(encodedFilename)")!
         
         // For certain formats, try to get an alternative streaming URL
         if filename.hasSuffix(".m4v") {
             // Try mp4 version first
             let mp4Filename = filename.replacingOccurrences(of: ".m4v", with: ".mp4")
-            return URL(string: "\(baseURL)/download/\(identifier)/\(mp4Filename)")!
+            return URL(string: "\(baseURL)/serve/\(identifier)/\(mp4Filename)")!
         }
         
         // For older formats, try to get the streaming version
@@ -146,32 +146,24 @@ extension InternetArchiveAPI {
                 with: "_512kb.mp4",
                 options: .regularExpression
             )
-            return URL(string: "\(baseURL)/download/\(identifier)/\(streamingFilename)")!
+            return URL(string: "\(baseURL)/serve/\(identifier)/\(streamingFilename)")!
         }
         
         // Try alternative URL formats for problematic files
         if filename.hasSuffix(".mp4") {
             // Try with _512kb suffix first
             let streamingFilename = filename.replacingOccurrences(of: ".mp4", with: "_512kb.mp4")
-            let streamingURL = URL(string: "\(baseURL)/download/\(identifier)/\(streamingFilename)")!
+            let streamingURL = URL(string: "\(baseURL)/serve/\(identifier)/\(streamingFilename)")!
             
             // Try with h264 suffix as fallback
             let h264Filename = filename.replacingOccurrences(of: ".mp4", with: "_h264.mp4")
-            let h264URL = URL(string: "\(baseURL)/download/\(identifier)/\(h264Filename)")!
-            
-            // Try with original filename but different path format
-            let altURL = URL(string: "\(baseURL)/serve/\(identifier)/\(encodedFilename)")
+            let h264URL = URL(string: "\(baseURL)/serve/\(identifier)/\(h264Filename)")!
             
             // Return the first valid URL
-            if let altURL = altURL {
-                return altURL
-            }
-            
-            // Default to streaming version if available
-            return streamingURL
+            return serveURL
         }
         
-        return directURL
+        return serveURL
     }
     
     static func getThumbnailURL(identifier: String) -> URL {

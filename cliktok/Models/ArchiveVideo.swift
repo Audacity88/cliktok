@@ -18,4 +18,11 @@ struct ArchiveVideo: Identifiable {
         self.thumbnailURL = thumbnailURL
         self.description = description
     }
+    
+    static let placeholder = ArchiveVideo(
+        title: "",
+        videoURL: "",
+        thumbnailURL: nil,
+        description: nil
+    )
 }
