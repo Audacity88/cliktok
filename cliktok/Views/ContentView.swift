@@ -133,14 +133,14 @@ struct ContentView: View {
                         }
                         .tag(1)
                         
-                        // Home Tab
+                        // Uploads Tab
                         NavigationStack {
                             UnifiedVideoView(mode: .feed)
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
                             Image(systemName: "house.fill")
-                            Text("Home")
+                            Text("Uploads")
                         }
                         .tag(2)
                         

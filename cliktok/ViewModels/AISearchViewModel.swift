@@ -14,6 +14,8 @@ class AISearchViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var currentTaskId: UUID?
     
+    var onResultFound: ((ArchiveVideo) -> Void)?
+    
     init() {
         // Set up search query debouncing
         $searchQuery
@@ -34,59 +36,77 @@ class AISearchViewModel: ObservableObject {
             await aiService.handleTaskCancellation(taskId)
         }
         
-        guard !searchQuery.isEmpty else {
-            await clearSearch()
-            return
-        }
-        
         isLoading = true
         errorMessage = nil
+        searchResults.removeAll()
         currentTaskId = await aiService.startTask()
         
         guard let taskId = currentTaskId else { return }
         
+        // Store callback locally to ensure it's not cleared during search
+        let callback = onResultFound
+        
         do {
-            // Search Internet Archive directly with the query
+            // Build search query based on searchQuery
+            let searchTerm = searchQuery.isEmpty ? "random" : searchQuery
+            let queryString = """
+            (title:"\(searchTerm)" OR description:"\(searchTerm)") AND \
+            (mediatype:movies OR mediatype:movingimage) AND \
+            -collection:test_videos AND \
+            (format:mp4 OR format:h.264 OR format:512kb)
+            """
+            
+            print("Searching with query: \(queryString)")
+            
+            // Search Internet Archive with multiple results
             let results = try await archiveAPI.fetchCollectionItems(
-                identifier: "artsandmusicvideos",
+                query: queryString,
                 offset: 0,
-                limit: 20 // Reduced limit since we only rank 20 anyway
+                limit: 5  // Fetch 5 results
             )
             
-            // Rank results using GPT
-            let rankedResults = try await aiService.searchAndRankVideos(results, query: searchQuery, taskId: taskId)
+            print("Found \(results.count) initial results")
             
-            // Update UI if this is still the current task
-            if currentTaskId == taskId {
-                searchResults = rankedResults
-                errorMessage = nil
+            // Process all results
+            if !results.isEmpty {
+                let rankedResults = try await aiService.searchAndRankVideos(results, query: searchQuery, taskId: taskId)
+                
+                // Update searchResults
+                await MainActor.run {
+                    searchResults = rankedResults
+                }
+                
+                // Notify about each result
+                for video in rankedResults {
+                    print("Processing video: \(video.identifier)")
+                    if let callback = callback {
+                        print("Calling onResultFound callback for \(video.identifier)")
+                        await MainActor.run {
+                            callback(video)
+                        }
+                    }
+                }
+            } else {
+                print("Warning: No initial results found")
             }
+            
+            print("Search complete")
+            errorMessage = nil
+            
         } catch AISearchError.cancelled {
-            // Ignore cancellation errors
+            print("Search cancelled")
         } catch AISearchError.invalidAPIKey {
             errorMessage = "OpenAI API key not configured. Please check your environment variables."
-            #if DEBUG
-            print("""
-            ⚠️ OpenAI API key not found!
-            
-            Please set up the OPENAI_API_KEY environment variable:
-            1. Open Xcode
-            2. Select cliktok scheme
-            3. Edit Scheme...
-            4. Run > Arguments > Environment Variables
-            5. Add OPENAI_API_KEY with your API key
-            """)
-            #endif
+            print("Invalid API key error")
         } catch let error as AISearchError {
             errorMessage = error.localizedDescription
+            print("AISearchError: \(error.localizedDescription)")
         } catch {
             errorMessage = "Search failed: \(error.localizedDescription)"
+            print("Unexpected error: \(error)")
         }
         
-        // Update loading state if this is still the current task
-        if currentTaskId == taskId {
-            isLoading = false
-        }
+        isLoading = false
     }
     
     func clearSearch() async {

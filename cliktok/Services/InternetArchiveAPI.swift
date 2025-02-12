@@ -209,29 +209,40 @@ actor InternetArchiveAPI {
         videoCache.removeAll()
     }
     
-    func fetchCollectionItems(identifier: String, offset: Int = 0, limit: Int = 5) async throws -> [ArchiveVideo] {
-        print("InternetArchiveAPI: Searching for items in collection: \(identifier) with offset: \(offset), limit: \(limit)")
-        
-        // Calculate the page number based on offset and limit
-        let page = (offset / limit) + 1
+    func fetchCollectionItems(identifier: String? = nil, query: String? = nil, offset: Int = 0, limit: Int = 5) async throws -> [ArchiveVideo] {
+        print("InternetArchiveAPI: Searching with query: \(query ?? "nil"), collection: \(identifier ?? "nil")")
         
         let searchURL = URL(string: "\(Self.baseURL)/advancedsearch.php")!
         var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
         
+        // Build the query string
+        let queryString: String
+        if let query = query {
+            queryString = query
+        } else if let identifier = identifier {
+            queryString = "collection:\(identifier) AND (mediatype:movies OR mediatype:movingimage)"
+        } else {
+            queryString = "(mediatype:movies OR mediatype:movingimage)"
+        }
+        
         // Base query items
         var queryItems = [
-            URLQueryItem(name: "q", value: "collection:\(identifier) AND (mediatype:movies OR mediatype:movingimage)"),
+            URLQueryItem(name: "q", value: queryString),
             URLQueryItem(name: "fl[]", value: "identifier,title,description,mediatype"),
             URLQueryItem(name: "output", value: "json"),
             URLQueryItem(name: "rows", value: "\(limit)"),
-            URLQueryItem(name: "page", value: "\(page)")
+            URLQueryItem(name: "page", value: "\((offset / limit) + 1)")
         ]
         
-        // Add collection-specific sorting
-        if identifier == "artsandmusicvideos" {
+        // Add sorting based on query type
+        if query != nil {
+            // For search queries, sort by relevance and downloads
+            queryItems.append(URLQueryItem(name: "sort[]", value: "-downloads"))
+            queryItems.append(URLQueryItem(name: "sort[]", value: "-week"))
+        } else if identifier == "artsandmusicvideos" {
             queryItems.append(URLQueryItem(name: "sort[]", value: "-reviewdate"))
         } else {
-            // Default sorting for other collections
+            // Default sorting for collections
             queryItems.append(URLQueryItem(name: "sort[]", value: "-downloads"))
             queryItems.append(URLQueryItem(name: "sort[]", value: "-week"))
         }
@@ -321,7 +332,7 @@ actor InternetArchiveAPI {
         // Define preferred formats and their priorities
         let preferredFormats = [
             "512kb.mp4": 1,
-            "mp4": 2,
+            ".mp4": 2,
             "h.264": 3,
             "mpeg4": 4,
             "m4v": 5,
@@ -330,25 +341,11 @@ actor InternetArchiveAPI {
         ]
         
         for file in metadata.files {
-            // Skip files that are clearly derivatives or thumbnails
-            if file.name.contains("_thumb") || file.name.contains("_small") || 
-               file.name.contains("_preview") || file.name.contains(".gif") ||
-               file.name.contains("_pixels") || file.name.contains(".rm") ||
-               file.name.contains("_meta") || file.name.contains(".srt") ||
-               file.name.contains(".vtt") || file.name.contains("_reviews") ||
-               file.name.contains("_archive") || file.name.contains("_files") ||
-               file.name.contains("_meta.xml") || file.name.contains(".sqlite") ||
-               file.name.contains(".torrent") || file.name.contains("__ia_thumb") {
-                continue
-            }
-            
-            // Skip very small files (likely thumbnails or previews)
-            if let size = file.size, let sizeInt = Int(size), sizeInt < 1000000 {
-                continue
-            }
-            
-            // Skip files marked as derivatives
-            if file.source?.lowercased() == "derivative" {
+            // Skip obvious non-video files
+            if file.name.hasSuffix(".srt") || file.name.hasSuffix(".vtt") ||
+               file.name.hasSuffix(".gif") || file.name.hasSuffix(".jpg") ||
+               file.name.hasSuffix(".png") || file.name.hasSuffix(".txt") ||
+               file.name.hasSuffix(".nfo") || file.name.hasSuffix(".xml") {
                 continue
             }
             
@@ -404,15 +401,18 @@ actor InternetArchiveAPI {
             
             if let bestVariant = sortedVariants.first {
                 let file = bestVariant.0
-                let videoURL = Self.getVideoURL(identifier: metadata.metadata.identifier)
+                let videoURL = "\(Self.baseURL)/download/\(metadata.metadata.identifier)/\(file.name)"
                 
                 let video = ArchiveVideo(
+                    identifier: metadata.metadata.identifier,
                     title: file.title ?? metadata.metadata.title ?? file.name,
                     videoURL: videoURL,
+                    thumbnailURL: Self.getThumbnailURL(identifier: metadata.metadata.identifier).absoluteString,
                     description: file.description ?? metadata.metadata.description ?? ""
                 )
                 
                 bestFormatVideos.append(video)
+                print("InternetArchiveAPI: Added video: \(file.name) from \(metadata.metadata.identifier)")
             }
         }
         

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Terminal Content View
 private struct TerminalContentView: View {
@@ -243,10 +244,15 @@ struct TerminalView: View {
         case let cmd where cmd.hasPrefix("search "):
             let query = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
             handleSearch(query: query)
+        case let cmd where cmd.hasPrefix("view "):
+            handleViewCommand(cmd)
         case "trending":
             handleTrendingSearch()
         case "random":
             handleRandomSearch()
+        case "back":
+            conversation.append((role: "system", content: "Returned to previous view."))
+            isProcessing = false
         default:
             // No longer process as AI query by default
             conversation.append((role: "system", content: "Unknown command. Type 'help' for available commands."))
@@ -298,70 +304,226 @@ struct TerminalView: View {
     }
     
     private func handleSearch(query: String) {
-        Task {
+        Task { @MainActor in
+            print("Starting search for query: \(query)")
+            isProcessing = true
+            conversation.append((role: "system", content: "Searching for: \(query)..."))
+            
+            // Track displayed results
+            var displayedResults = Set<String>()
+            var headerShown = false
+            
+            // Create callback
+            let searchCallback: (ArchiveVideo) -> Void = { video in
+                print("Callback received video: \(video.identifier)")
+                Task { @MainActor in
+                    if !displayedResults.contains(video.identifier) {
+                        displayedResults.insert(video.identifier)
+                        
+                        // Show header if this is the first result
+                        if !headerShown {
+                            self.conversation.append((role: "system", content: """
+                            ╔═══ SEARCH RESULTS ═══╗
+                            Found matching videos:
+                            ═══════════════════════
+                            """))
+                            headerShown = true
+                        }
+                        
+                        // Add result
+                        self.conversation.append((role: "system", content: """
+                        [\(displayedResults.count)] \(video.title)
+                        ├─ ID: \(video.identifier)
+                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
+                        └─ URL: \(video.videoURL)
+                        ───────────────────────
+                        """))
+                        print("Added video to conversation")
+                    }
+                }
+            }
+            
+            // Set callback and start search
+            print("Setting callback")
+            aiService.onResultFound = searchCallback
+            print("Callback set, starting search")
+            
+            aiService.searchQuery = query
             await aiService.performSearch()
             
-            if aiService.searchResults.isEmpty {
-                conversation.append((role: "system", content: "No results found for: \(query)"))
+            // Clear callback
+            aiService.onResultFound = nil
+            
+            // Show footer if results were found
+            if !displayedResults.isEmpty {
+                conversation.append((role: "system", content: """
+                
+                Commands:
+                - view [number]: View video details (e.g., 'view 1')
+                - play [number]: Play video
+                - search [query]: New search
+                """))
             } else {
-                let formattedResults = formatSearchResults(aiService.searchResults)
-                conversation.append((role: "system", content: formattedResults))
+                conversation.append((role: "system", content: "No results found for: \(query)"))
             }
+            
             isProcessing = false
         }
     }
     
+    private func handleViewCommand(_ command: String) {
+        // Extract the number from the command
+        let parts = command.split(separator: " ")
+        guard parts.count == 2,
+              let number = Int(parts[1]),
+              number > 0,
+              number <= aiService.searchResults.count else {
+            conversation.append((role: "system", content: "Invalid view command. Usage: view [number]"))
+            isProcessing = false
+            return
+        }
+        
+        // Get the video
+        let video = aiService.searchResults[number - 1]
+        
+        // Show detailed info
+        conversation.append((role: "system", content: """
+        ╔═══ VIDEO DETAILS ═══╗
+        Title: \(video.title)
+        ID: \(video.identifier)
+        
+        Description:
+        \(video.description ?? "No description available")
+        
+        URL: \(video.videoURL)
+        Thumbnail: \(video.thumbnailURL ?? "No thumbnail")
+        ═══════════════════════
+        
+        Commands:
+        - play \(number): Play this video
+        - back: Return to search results
+        """))
+        isProcessing = false
+    }
+    
     private func handleTrendingSearch() {
-        Task {
-            // For now, just use regular search with "trending" query
+        Task { @MainActor in
+            isProcessing = true
+            conversation.append((role: "system", content: "Finding trending videos..."))
+            
+            // Track already displayed results to avoid duplicates
+            var displayedResults = Set<String>()
+            var headerShown = false
+            
+            // Set up the callback for new results
+            aiService.onResultFound = { (video: ArchiveVideo) in
+                Task { @MainActor in
+                    if !displayedResults.contains(video.identifier) {
+                        displayedResults.insert(video.identifier)
+                        
+                        // Show header if this is the first result
+                        if !headerShown {
+                            conversation.append((role: "system", content: """
+                            ╔═══ TRENDING VIDEOS ═══╗
+                            Found trending videos:
+                            ═══════════════════════
+                            """))
+                            headerShown = true
+                        }
+                        
+                        let result = """
+                        [\(displayedResults.count)] \(video.title)
+                        ├─ ID: \(video.identifier)
+                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
+                        └─ URL: \(video.videoURL)
+                        ───────────────────────
+                        """
+                        conversation.append((role: "system", content: result))
+                    }
+                }
+            }
+            
+            // Start the search
             await aiService.performSearch()
             
-            if aiService.searchResults.isEmpty {
+            // Clear the callback
+            aiService.onResultFound = nil
+            
+            if displayedResults.isEmpty {
                 conversation.append((role: "system", content: "No trending videos found."))
             } else {
-                let header = "╔═══ TRENDING VIDEOS ═══╗\n"
-                let results = formatSearchResults(aiService.searchResults)
-                conversation.append((role: "system", content: header + results))
+                // Show footer
+                conversation.append((role: "system", content: """
+                
+                Commands:
+                - play [ID]: Play video
+                - info [ID]: Show full video info
+                - trending: Refresh trending videos
+                """))
             }
+            
             isProcessing = false
         }
     }
     
     private func handleRandomSearch() {
-        Task {
-            // For now, just use regular search with "random" query
+        Task { @MainActor in
+            isProcessing = true
+            conversation.append((role: "system", content: "Finding random videos..."))
+            
+            // Track already displayed results to avoid duplicates
+            var displayedResults = Set<String>()
+            var headerShown = false
+            
+            // Set up the callback for new results
+            aiService.onResultFound = { (video: ArchiveVideo) in
+                Task { @MainActor in
+                    if !displayedResults.contains(video.identifier) {
+                        displayedResults.insert(video.identifier)
+                        
+                        // Show header if this is the first result
+                        if !headerShown {
+                            conversation.append((role: "system", content: """
+                            ╔═══ RANDOM VIDEOS ═══╗
+                            Found random videos:
+                            ═══════════════════════
+                            """))
+                            headerShown = true
+                        }
+                        
+                        let result = """
+                        [\(displayedResults.count)] \(video.title)
+                        ├─ ID: \(video.identifier)
+                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
+                        └─ URL: \(video.videoURL)
+                        ───────────────────────
+                        """
+                        conversation.append((role: "system", content: result))
+                    }
+                }
+            }
+            
+            // Start the search
             await aiService.performSearch()
             
-            if aiService.searchResults.isEmpty {
+            // Clear the callback
+            aiService.onResultFound = nil
+            
+            if displayedResults.isEmpty {
                 conversation.append((role: "system", content: "No random videos found."))
             } else {
-                let header = "╔═══ RANDOM SELECTION ═══╗\n"
-                let results = formatSearchResults(aiService.searchResults)
-                conversation.append((role: "system", content: header + results))
+                // Show footer
+                conversation.append((role: "system", content: """
+                
+                Commands:
+                - play [ID]: Play video
+                - info [ID]: Show full video info
+                - random: Get new random videos
+                """))
             }
+            
             isProcessing = false
         }
-    }
-    
-    private func formatSearchResults(_ videos: [ArchiveVideo]) -> String {
-        let header = """
-        Found \(videos.count) results:
-        ═══════════════════════
-        
-        """
-        
-        let results = videos.prefix(5).enumerated().map { (index, video) in
-            """
-            [\(index + 1)] \(video.title)
-            └─ \(video.description?.prefix(100) ?? "No description")...
-            └─ ID: \(video.id)
-            ───────────────────────
-            """
-        }.joined(separator: "\n")
-        
-        let footer = "\nType 'search [query]' to search again"
-        
-        return header + results + footer
     }
     
     private func showWalletInfo() {
@@ -395,18 +557,43 @@ struct TerminalView: View {
     }
     
     private func formatRecentTransactions() -> String {
+        // Group tips by user and time window (30 second intervals)
         let allTips = (tipViewModel.receivedTips + tipViewModel.sentTips)
-            .sorted { $0.timestamp > $1.timestamp }
-            .prefix(5)
         
-        if allTips.isEmpty {
+        // Group tips by user and time window
+        let groupedTips = Dictionary(grouping: allTips) { tip in
+            let id = tipViewModel.receivedTips.contains(where: { $0.id == tip.id }) ? tip.senderID : tip.receiverID
+            let timeWindow = Int(tip.timestamp.timeIntervalSince1970 / 30)
+            return "\(id)-\(timeWindow)"
+        }
+        
+        // Convert grouped tips to sorted array
+        let consolidatedTips = groupedTips.map { key, tips in
+            let latestTip = tips.max(by: { $0.timestamp < $1.timestamp })
+            return (
+                id: "\(key)-\(tips.count)-\(latestTip?.timestamp.timeIntervalSince1970 ?? 0)",
+                tips: tips
+            )
+        }.sorted { group1, group2 in
+            let latest1 = group1.tips.max(by: { $0.timestamp < $1.timestamp })?.timestamp ?? Date.distantPast
+            let latest2 = group2.tips.max(by: { $0.timestamp < $1.timestamp })?.timestamp ?? Date.distantPast
+            return latest1 > latest2
+        }
+        
+        if consolidatedTips.isEmpty {
             return "No recent transactions"
         }
         
-        return allTips.map { tip in
-            let type = tipViewModel.receivedTips.contains(where: { $0.id == tip.id }) ? "+" : "-"
-            let date = tip.timestamp.formatted(date: .abbreviated, time: .shortened)
-            return "\(type)$\(String(format: "%.2f", tip.amount)) (\(date))"
+        // Format each group
+        return consolidatedTips.prefix(5).map { group in
+            let totalAmount = group.tips.reduce(0) { $0 + $1.amount }
+            let isReceived = tipViewModel.receivedTips.contains(where: { $0.id == group.tips[0].id })
+            let type = isReceived ? "+" : "-"
+            let date = group.tips[0].timestamp.formatted(date: .numeric, time: .shortened)
+            let userID = isReceived ? group.tips[0].senderID : group.tips[0].receiverID
+            let countSuffix = group.tips.count > 1 ? " (\(group.tips.count) tips)" : ""
+            
+            return "\(type)$\(String(format: "%.2f", totalAmount)) from \(userID) at \(date)\(countSuffix)"
         }.joined(separator: "\n")
     }
     
