@@ -36,21 +36,21 @@ class ArchiveVideoViewModel: ObservableObject {
             description: "Sample videos for testing",
             videos: [
                 ArchiveVideo(
-                    id: "test_pattern",
+                    identifier: "test_pattern",
                     title: "Test Pattern",
                     videoURL: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
                     thumbnailURL: nil,
                     description: "Test video for streaming"
                 ),
                 ArchiveVideo(
-                    id: "big_buck_bunny",
+                    identifier: "big_buck_bunny",
                     title: "Big Buck Bunny",
                     videoURL: "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
                     thumbnailURL: nil,
                     description: "Big Buck Bunny - Classic open source animation"
                 ),
                 ArchiveVideo(
-                    id: "elephants_dream",
+                    identifier: "elephants_dream",
                     title: "Elephants Dream",
                     videoURL: "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4",
                     thumbnailURL: nil,
@@ -80,11 +80,6 @@ class ArchiveVideoViewModel: ObservableObject {
         
         collections = [testVideos] + archiveCollectionModels
         selectedCollection = testVideos
-        
-        // Start prefetching first page of videos for each collection
-        Task {
-            await prefetchCollections(archiveCollectionModels)
-        }
     }
     
     private func prefetchCollections(_ collections: [ArchiveCollection]) async {
@@ -168,6 +163,10 @@ class ArchiveVideoViewModel: ObservableObject {
         do {
             // Load initial page
             try await loadMoreVideos(for: collection, startIndex: 0)
+            
+            // Prefetch other collections when a collection is selected
+            let otherCollections = collections.filter { $0.id != collection.id && $0.id != "test_videos" }
+            await prefetchCollections(otherCollections)
         } catch {
             self.error = "Failed to load videos: \(error.localizedDescription)"
             print("Error loading collection: \(error)")

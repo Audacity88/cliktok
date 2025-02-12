@@ -134,33 +134,35 @@ class VideoFeedViewModel: ObservableObject {
         }
     }
     
-    func updateVideoStats(video: Video, liked: Bool? = nil, viewed: Bool = true) async {
-        let documentId = video.statsDocumentId
+    func updateVideoStats(video: Video) async throws {
+        print("Updating video stats for video: \(video.stableId)")
+        let db = Firestore.firestore()
+        let statsRef = db.collection(video.isArchiveVideo ? "archive_video_stats" : "video_stats").document(video.statsDocumentId)
         
         do {
-            var updates: [String: Any] = [:]
+            // Try to get the document first
+            let docSnapshot = try await statsRef.getDocument()
             
-            if viewed {
-                updates["views"] = FieldValue.increment(Int64(1))
-                // Update local video object
-                if let index = videos.firstIndex(where: { $0.displayId == video.displayId }) {
-                    videos[index].views += 1
-                }
-                if let index = searchResults.firstIndex(where: { $0.displayId == video.displayId }) {
-                    searchResults[index].views += 1
-                }
+            if docSnapshot.exists {
+                // Document exists, update it
+                try await statsRef.updateData([
+                    "views": FieldValue.increment(Int64(1)),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+                print("Successfully updated stats for video: \(video.stableId)")
+            } else {
+                // Document doesn't exist, create it with initial stats
+                try await statsRef.setData([
+                    "views": 1,
+                    "likes": 0,
+                    "createdAt": FieldValue.serverTimestamp(),
+                    "updatedAt": FieldValue.serverTimestamp()
+                ])
+                print("Created initial stats document for video: \(video.stableId)")
             }
-            
-            if let liked = liked {
-                updates["likes"] = FieldValue.increment(Int64(liked ? 1 : -1))
-            }
-            
-            // Use the appropriate collection based on video type
-            let collectionPath = video.userID == "archive_user" ? "archive_video_stats" : "videos"
-            
-            try await db.collection(collectionPath).document(documentId).updateData(updates)
         } catch {
             print("Error updating video stats: \(error.localizedDescription)")
+            throw error
         }
     }
     

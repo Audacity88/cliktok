@@ -15,6 +15,19 @@ struct Video: Identifiable, Codable {
     var views: Int
     var isAdvertisement: Bool?
     
+    // Computed property to check if video is from Internet Archive
+    var isArchiveVideo: Bool {
+        return userID == "archive_user"
+    }
+    
+    // Stable identifier for local use, independent of Firestore document ID
+    var stableId: String {
+        if userID == "archive_user", let archiveId = archiveIdentifier {
+            return "archive_\(archiveId)"
+        }
+        return id ?? UUID().uuidString
+    }
+    
     // Computed property for display ID
     var displayId: String {
         if userID == "archive_user", let archiveId = archiveIdentifier {
@@ -30,6 +43,9 @@ struct Video: Identifiable, Codable {
         }
         return id ?? UUID().uuidString
     }
+    
+    // Make the Identifiable protocol use stableId instead of id
+    var identifiableId: String { stableId }
     
     enum CodingKeys: String, CodingKey {
         case id

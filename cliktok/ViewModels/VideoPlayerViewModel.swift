@@ -409,10 +409,36 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         print("VideoPlayerView: Added new time observer")
     }
     
+    @MainActor
+    func updateVisibility(_ isVisible: Bool) {
+        self.isVisible = isVisible
+        if isVisible {
+            print("VideoPlayerView: Video is visible, setting as current")
+            if let player = player, player.timeControlStatus != .playing {
+                player.play()
+                isPlaying = true
+            }
+        } else {
+            print("VideoPlayerView: Video is not visible, pausing")
+            player?.pause()
+            isPlaying = false
+        }
+    }
+    
+    @MainActor
+    func ensurePlayback() {
+        if isVisible && !isPlaying {
+            print("VideoPlayerView: Ensuring playback for visible video")
+            player?.play()
+            isPlaying = true
+        }
+    }
+    
+    @MainActor
     func togglePlayPause() {
         if isPlaying {
-            player?.pause()
             print("Video PAUSED")
+            player?.pause()
         } else {
             player?.play()
             print("Video PLAYING")
@@ -426,97 +452,6 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         player?.isMuted = isMuted
         if !isMuted {
             player?.volume = 1.0
-        }
-    }
-    
-    func updateVisibility(_ isVisible: Bool) {
-        print("VideoPlayerView: Updating visibility to \(isVisible)")
-        
-        // Store the pending update
-        pendingVisibilityUpdate = isVisible
-        
-        // If we're in cleanup state or visibility transition, don't process changes yet
-        guard !isInCleanupState && !isInVisibilityTransition else {
-            print("VideoPlayerView: Storing visibility update for later - in cleanup or transition state")
-            return
-        }
-        
-        // Prevent rapid visibility changes
-        let timeSinceLastUpdate = Date().timeIntervalSince(lastVisibilityUpdate)
-        if timeSinceLastUpdate < 0.5 { // Minimum 0.5 seconds between updates
-            print("VideoPlayerView: Deferring visibility update - too soon after last update")
-            return
-        }
-        
-        // Cancel any pending visibility update
-        visibilityDebounceTask?.cancel()
-        
-        // If becoming invisible and we just started playback, debounce the visibility change
-        if !isVisible && lastPlaybackStartTime != nil {
-            let timeSincePlaybackStart = Date().timeIntervalSince(lastPlaybackStartTime!)
-            if timeSincePlaybackStart < 2.0 { // Within 2 seconds of starting playback
-                print("VideoPlayerView: Debouncing visibility change - too close to playback start")
-                visibilityDebounceTask = Task { @MainActor in
-                    do {
-                        try await Task.sleep(nanoseconds: 2_000_000_000) // Wait 2 seconds
-                        if !Task.isCancelled {
-                            handleVisibilityChange(isVisible)
-                        }
-                    } catch {
-                        print("VideoPlayerView: Visibility debounce task cancelled")
-                    }
-                }
-                return
-            }
-        }
-        
-        handleVisibilityChange(isVisible)
-    }
-    
-    private func handleVisibilityChange(_ isVisible: Bool) {
-        guard !isInVisibilityTransition else { return }
-        
-        isInVisibilityTransition = true
-        defer {
-            isInVisibilityTransition = false
-            lastVisibilityUpdate = Date()
-            pendingVisibilityUpdate = nil
-        }
-        
-        self.isVisible = isVisible
-        
-        if isVisible {
-            // Only start loading if we haven't started yet and don't have a player
-            if player == nil {
-                Task {
-                    await loadAndPlayVideo()
-                }
-            } else {
-                // Only update currently playing reference if we have a valid player
-                // Stop any currently playing video first
-                if let currentPlayer = VideoPlayerViewModel.currentlyPlayingViewModel,
-                   currentPlayer !== self {
-                    print("VideoPlayerView: Stopping currently playing video")
-                    currentPlayer.cleanupPlayer()
-                }
-                
-                print("VideoPlayerView: Setting self as currently playing")
-                VideoPlayerViewModel.currentlyPlayingViewModel = self
-                
-                // If we're already loaded and ready, start playing
-                if isValidForPlayback {
-                    print("VideoPlayerView: Player is ready, starting playback")
-                    player?.play()
-                    isPlaying = true
-                    showPlayButton = false
-                    lastPlaybackStartTime = Date()
-                }
-            }
-        } else {
-            if VideoPlayerViewModel.currentlyPlayingViewModel === self {
-                print("VideoPlayerView: No longer visible, cleaning up")
-                cleanupPlayer()
-            }
         }
     }
     

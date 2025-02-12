@@ -111,7 +111,7 @@ struct VideoList: View {
     
     var body: some View {
         TabView(selection: $selectedIndex) {
-            ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
+            ForEach(Array(videos.enumerated()), id: \.element.stableId) { index, video in
                 ZStack {
                     VideoPlayerView(
                         video: video,
@@ -210,7 +210,7 @@ struct UnifiedVideoView: View {
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
         
-        if let index = videos.firstIndex(where: { $0.id == startingVideo.id }) {
+        if let index = videos.firstIndex(where: { $0.stableId == startingVideo.stableId }) {
             self._currentIndex = State(initialValue: index)
         } else {
             self._currentIndex = State(initialValue: 0)
@@ -225,7 +225,8 @@ struct UnifiedVideoView: View {
             guard let collection = archiveViewModel.selectedCollection else { return [] }
             return collection.videos.map { archiveVideo in
                 Video(
-                    id: archiveVideo.id,
+                    id: nil,
+                    archiveIdentifier: archiveVideo.identifier,
                     userID: "archive_user",
                     videoURL: archiveVideo.videoURL.optimizedVideoURL(),
                     caption: archiveVideo.title,
@@ -468,6 +469,9 @@ struct UnifiedVideoView: View {
         isPrefetching = true
         defer { isPrefetching = false }
         
+        // Wait for current video to be ready before prefetching next ones
+        try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second delay
+        
         let nextIndices = [currentIndex + 1, currentIndex + 2]
         
         for nextIndex in nextIndices {
@@ -481,10 +485,11 @@ struct UnifiedVideoView: View {
                 print("UnifiedVideoView: Prefetching video at index \(nextIndex)")
                 
                 do {
+                    // Add increasing delay for each subsequent video
                     if nextIndex > currentIndex + 1 {
-                        try await Task.sleep(nanoseconds: 500_000_000)
+                        try await Task.sleep(nanoseconds: 1_500_000_000)  // 1.5 second delay
                     }
-                    await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: nextIndex == currentIndex + 1 ? .high : .medium)
+                    await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: nextIndex == currentIndex + 1 ? .high : .low)
                 } catch {
                     print("UnifiedVideoView: Prefetch cancelled for index \(nextIndex)")
                 }
@@ -493,8 +498,8 @@ struct UnifiedVideoView: View {
     }
     
     private func cleanupDistantVideos(currentIndex: Int) {
-        // Reduce buffer size to clean up videos more aggressively
-        let bufferSize = 2  // Keep only 2 videos on each side
+        // Only keep current video and immediate neighbors
+        let bufferSize = 1  // Keep only 1 video on each side
         let lowerBound = max(0, currentIndex - bufferSize)
         let upperBound = min(currentIndex + bufferSize, currentVideos.count - 1)
         
@@ -506,12 +511,14 @@ struct UnifiedVideoView: View {
         let keepRange = lowerBound...upperBound
         print("UnifiedVideoView: Keeping videos in range \(keepRange)")
         
-        // Cleanup videos outside our buffer range immediately
+        // Cleanup videos outside our buffer range
         for (index, video) in currentVideos.enumerated() {
             if !keepRange.contains(index) {
                 if let url = URL(string: video.videoURL) {
-                    print("UnifiedVideoView: Immediate cleanup of video at index \(index)")
+                    print("UnifiedVideoView: Cleaning up video at index \(index)")
+                    // Add slight delay to prevent cleanup during transitions
                     Task {
+                        try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 second delay
                         await VideoAssetLoader.shared.cleanupAsset(for: url)
                     }
                 }

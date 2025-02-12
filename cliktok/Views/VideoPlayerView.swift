@@ -633,6 +633,11 @@ struct VideoPlayerView: View {
     @Binding var clearSearchOnDismiss: Bool
     @Binding var isVisible: Bool
     
+    // Add viewing time tracking
+    @State private var viewingStartTime: Date?
+    @State private var hasUpdatedStats = false
+    private let minimumViewDuration: TimeInterval = 2.0 // Minimum viewing time to count as a view
+    
     // UI states
     @State private var isDraggingProgress = false
     @State private var showControls = true
@@ -770,7 +775,7 @@ struct VideoPlayerView: View {
     }
     
     private func setupVideo() {
-        print("VideoPlayerView appeared for video: \(video.id)")
+        print("VideoPlayerView appeared for video: \(video.stableId)")
         playerViewModel.setVideo(url: video.videoURL, isVisible: isVisible, hideControls: {
             withAnimation {
                 showControls = false
@@ -789,17 +794,53 @@ struct VideoPlayerView: View {
             
             if let videoId = video.id {
                 totalTips = tipViewModel.sentTips.filter { $0.videoID == videoId }.count
+            } else {
+                print("No Firestore ID available for video: \(video.stableId)")
             }
         }
     }
     
     private func handleVisibilityChange(_ newValue: Bool) {
         if newValue {
+            // Start tracking viewing time when video becomes visible
+            viewingStartTime = Date()
+            hasUpdatedStats = false
+            
+            // Immediately update player visibility for autoplay
+            playerViewModel.updateVisibility(true)
+            
+            // Schedule cleanup cancellation if needed
             Task {
-                await feedViewModel.updateVideoStats(video: video)
+                try? await Task.sleep(nanoseconds: 300_000_000)  // 0.3 second delay
+                if isVisible {  // Reconfirm visibility after delay
+                    playerViewModel.ensurePlayback()
+                }
+            }
+        } else {
+            if let startTime = viewingStartTime, !hasUpdatedStats {
+                let viewingDuration = Date().timeIntervalSince(startTime)
+                
+                if viewingDuration >= minimumViewDuration {
+                    Task {
+                        do {
+                            try await feedViewModel.updateVideoStats(video: video)
+                            hasUpdatedStats = true
+                        } catch {
+                            print("Error updating video stats: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+            viewingStartTime = nil
+            
+            // Add delay before cleanup to prevent premature cleanup during transitions
+            Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)  // 0.5 second delay
+                if !isVisible {  // Check if still invisible after delay
+                    playerViewModel.updateVisibility(false)
+                }
             }
         }
-        playerViewModel.updateVisibility(newValue)
     }
     
     private func handleEditSheetChange(_ newValue: Bool) {
