@@ -312,6 +312,7 @@ struct TerminalView: View {
             // Track displayed results
             var displayedResults = Set<String>()
             var headerShown = false
+            var searchComplete = false
             
             // Create callback
             let searchCallback: (ArchiveVideo) -> Void = { video in
@@ -334,11 +335,20 @@ struct TerminalView: View {
                         self.conversation.append((role: "system", content: """
                         [\(displayedResults.count)] \(video.title)
                         ├─ ID: \(video.identifier)
-                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
-                        └─ URL: \(video.videoURL)
-                        ───────────────────────
+                        └─ Description: \(video.description?.prefix(100) ?? "No description")...
                         """))
                         print("Added video to conversation")
+                        
+                        // Show footer after each result if search is complete
+                        if searchComplete && displayedResults.count == aiService.searchResults.count {
+                            self.conversation.append((role: "system", content: """
+                            ═══════════════════════
+                            Available Commands:
+                            - view [number]: View video details (e.g., 'view 1')
+                            - play [number]: Play video
+                            - search [query]: New search
+                            """))
+                        }
                     }
                 }
             }
@@ -350,20 +360,15 @@ struct TerminalView: View {
             
             aiService.searchQuery = query
             await aiService.performSearch()
+            searchComplete = true
             
             // Clear callback
             aiService.onResultFound = nil
             
-            // Show footer if results were found
-            if !displayedResults.isEmpty {
-                conversation.append((role: "system", content: """
-                
-                Commands:
-                - view [number]: View video details (e.g., 'view 1')
-                - play [number]: Play video
-                - search [query]: New search
-                """))
-            } else {
+            // Check for error message
+            if let error = aiService.errorMessage {
+                conversation.append((role: "system", content: error))
+            } else if displayedResults.isEmpty && !aiService.isLoading {
                 conversation.append((role: "system", content: "No results found for: \(query)"))
             }
             

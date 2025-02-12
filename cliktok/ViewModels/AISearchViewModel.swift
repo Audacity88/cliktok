@@ -67,9 +67,21 @@ class AISearchViewModel: ObservableObject {
             
             print("Found \(results.count) initial results")
             
+            // Only proceed if we haven't been cancelled
+            guard currentTaskId == taskId else {
+                print("Search was cancelled, stopping result processing")
+                return
+            }
+            
             // Process all results
             if !results.isEmpty {
                 let rankedResults = try await aiService.searchAndRankVideos(results, query: searchQuery, taskId: taskId)
+                
+                // Check again for cancellation
+                guard currentTaskId == taskId else {
+                    print("Search was cancelled during ranking")
+                    return
+                }
                 
                 // Update searchResults
                 await MainActor.run {
@@ -88,13 +100,14 @@ class AISearchViewModel: ObservableObject {
                 }
             } else {
                 print("Warning: No initial results found")
+                errorMessage = "No results found for: \(searchQuery)"
             }
             
             print("Search complete")
-            errorMessage = nil
             
         } catch AISearchError.cancelled {
-            print("Search cancelled")
+            print("Search cancelled - not treating as an error")
+            // Don't set error message for cancellation
         } catch AISearchError.invalidAPIKey {
             errorMessage = "OpenAI API key not configured. Please check your environment variables."
             print("Invalid API key error")
