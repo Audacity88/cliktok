@@ -281,6 +281,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                         VideoPlayerViewModel.currentlyPlayingViewModel = self
                         player?.play()
                         isPlaying = true
+                        logger.debug("🎬 [\(videoIdentifier)] Set isPlaying to true")
                         showPlayButton = false
                         lastPlaybackStartTime = Date()
                         
@@ -422,7 +423,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             // Update playing state
             let isCurrentlyPlaying = player.rate != 0
             if self.isPlaying != isCurrentlyPlaying {
-                self.logger.debug("▶️ [\(videoIdentifier)] Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying)")
+                self.logger.debug("▶️ [\(videoIdentifier)] Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying), player.rate: \(player.rate)")
                 self.isPlaying = isCurrentlyPlaying
                 self.showPlayButton = !isCurrentlyPlaying
             }
@@ -440,6 +441,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         if isVisible {
             logger.debug("👁️ [\(videoIdentifier)] Video is visible, setting as current")
             if let player = player, player.timeControlStatus != .playing {
+                logger.debug("▶️ [\(videoIdentifier)] Starting playback due to visibility change")
                 player.play()
                 isPlaying = true
             }

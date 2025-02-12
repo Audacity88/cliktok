@@ -11,12 +11,12 @@ public class Logger {
         
         var prefix: String {
             switch self {
-            case .debug: return "DEBUG"
-            case .info: return "INFO"
-            case .warning: return "WARN"
-            case .error: return "ERROR"
-            case .success: return "SUCCESS"
-            case .performance: return "PERF"
+            case .debug: return ""
+            case .info: return ""
+            case .warning: return ""
+            case .error: return ""
+            case .success: return ""
+            case .performance: return ""
             }
         }
     }

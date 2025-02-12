@@ -39,7 +39,6 @@ struct RetroStatusBar: View {
             logger.debug("🔋 Initial battery level: \(Int(batteryLevel * 100))%")
         }
         .onDisappear {
-            logger.debug("⚡️ Disabling battery monitoring")
             UIDevice.current.isBatteryMonitoringEnabled = false
         }
         .onReceive(timer) { input in

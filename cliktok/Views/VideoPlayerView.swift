@@ -147,7 +147,17 @@ actor VideoAssetLoader {
         let videoId = getVideoIdentifier(from: (asset as? AVURLAsset)?.url ?? URL(fileURLWithPath: "unknown"))
         self.logger.debug("📊 [\(videoId)] Starting metadata load")
         
-        // Load tracks in parallel
+        // Load only essential properties first
+        let essentialLoadingKeys: [String] = [
+            "tracks",
+            "duration",
+            "playable"
+        ]
+        
+        // Load essential properties in parallel
+        try await asset.loadValues(forKeys: essentialLoadingKeys)
+        
+        // Load tracks in parallel with optimized loading
         async let videoTrackTask = try await asset.loadTracks(withMediaType: .video)
         async let audioTrackTask = try await asset.loadTracks(withMediaType: .audio)
         
@@ -158,21 +168,20 @@ actor VideoAssetLoader {
             throw AssetError.noVideoTrack
         }
         
-        // Load essential video properties
+        // Load essential video properties in parallel
         logger.debug("🎥 [\(videoId)] Loading video track properties")
         let videoPropertiesStartTime = Date()
         
-        try await videoTrack.load(.formatDescriptions)
-        try await videoTrack.load(.naturalSize)
-        try await videoTrack.load(.preferredTransform)
+        let propertiesToLoad: [String] = ["formatDescriptions", "naturalSize", "preferredTransform"]
+        try await videoTrack.loadValues(forKeys: propertiesToLoad)
         
         logger.performance("⚡️ [\(videoId)] Video properties loaded in \(Date().timeIntervalSince(videoPropertiesStartTime))s")
         
-        // Load audio track properties in background
+        // Load audio track properties in background with lower priority
         if let audioTrack = audioTracks.first {
             Task.detached(priority: .background) {
                 self.logger.debug("🔊 [\(videoId)] Loading audio track properties in background")
-                try? await audioTrack.load(.formatDescriptions)
+                try? await audioTrack.loadValues(forKeys: ["formatDescriptions"])
             }
         }
         
@@ -229,7 +238,7 @@ actor VideoAssetLoader {
         logger.info("🎬 [\(videoId)] Starting to load asset from URL: \(url)")
         
         // Return cached asset if available
-        if let cachedAsset = assetCache.object(forKey: url as NSURL) as? AVURLAsset {
+        if let cachedAsset = await assetCache.object(forKey: url as NSURL) as? AVURLAsset {
             logger.success("✅ [\(videoId)] Found cached asset for URL: \(url)")
             currentAsset = cachedAsset
             return cachedAsset
@@ -253,16 +262,18 @@ actor VideoAssetLoader {
                 "preferredPeakBitRate": initialQuality.maxBitrate,
                 AVURLAssetReferenceRestrictionsKey: initialQuality.preferredMaximumResolution.rawValue,
                 "AVURLAssetHTTPHeaderFieldsKey": [
-                    "Range": "bytes=0-2097152",  // Request first 2MB initially
+                    "Range": "bytes=0-1048576",  // Request first 1MB initially for faster start
                     "icy-metadata": "0",         // Disable metadata
                     "Accept": "video/*",         // Hint at content type
                     "Cache-Control": "no-transform, max-age=31536000", // Prevent proxy compression, enable caching
                     "X-Playback-Session-Id": UUID().uuidString // Session tracking
                 ],
-                // Add loading optimization hints
-                "AVURLAssetPreferredBufferDurationKey": 4.0,
+                // Optimize loading settings
+                "AVURLAssetPreferredBufferDurationKey": 2.0, // Reduced from 4.0 for faster start
                 AVURLAssetAllowsCellularAccessKey: true,
-                "AVURLAssetHTTPUserAgentKey": "ClikTok/1.0"
+                "AVURLAssetHTTPUserAgentKey": "ClikTok/1.0",
+                "AVURLAssetPreferredPeakBitRateKey": 1.0, // Optimize for normal playback speed
+                "AVURLAssetPrefersPreciseTimingKey": false // Prioritize performance over precise timing
             ]
             
             let asset = AVURLAsset(url: url, options: initialOptions)
@@ -277,7 +288,7 @@ actor VideoAssetLoader {
             
             // Cache the initial quality asset
             let cacheStartTime = Date()
-            assetCache.setObject(asset, forKey: url as NSURL)
+            await assetCache.setObject(asset, forKey: url as NSURL)
             logger.performance("⚡️ [\(videoId)] Asset cached in \(Date().timeIntervalSince(cacheStartTime))s")
             
             logger.success("✅ [\(videoId)] Initial asset prepared in \(Date().timeIntervalSince(startTime))s")
@@ -381,7 +392,7 @@ actor VideoAssetLoader {
             try await loadInitialMetadata(for: upgradedAsset)
             
             // Update cache with higher quality version
-            assetCache.setObject(upgradedAsset, forKey: currentAsset.url as NSURL)
+            await assetCache.setObject(upgradedAsset, forKey: currentAsset.url as NSURL)
             logger.success("Quality upgrade completed in \(Date().timeIntervalSince(startTime))s")
             
         } catch {
@@ -417,7 +428,7 @@ actor VideoAssetLoader {
         // Skip if already cached or loading
         guard loadingAssets[url] == nil,
               prefetchTasks[url] == nil,
-              assetCache.object(forKey: url as NSURL) == nil else {
+              await assetCache.object(forKey: url as NSURL) == nil else {
             logger.debug("⏭️ [\(videoId)] Asset already cached or loading for URL: \(url)")
             return
         }
@@ -427,6 +438,37 @@ actor VideoAssetLoader {
         
         let task = Task {
             do {
+                // Create initial asset with low quality settings for faster loading
+                logger.debug("🎥 [\(videoId)] Creating initial asset during prefetch")
+                let initialOptions: [String: Any] = [
+                    AVURLAssetPreferPreciseDurationAndTimingKey: false,
+                    "preferredPeakBitRate": VideoQuality.low.maxBitrate,
+                    AVURLAssetReferenceRestrictionsKey: VideoQuality.low.preferredMaximumResolution.rawValue,
+                    "AVURLAssetHTTPHeaderFieldsKey": [
+                        "Range": "bytes=0-\(rangeSize)",
+                        "icy-metadata": "0",
+                        "Accept": "video/*",
+                        "Cache-Control": "no-transform",
+                        "X-Playback-Session-Id": UUID().uuidString
+                    ]
+                ]
+                
+                let asset = AVURLAsset(url: url, options: initialOptions)
+                
+                // Start loading essential metadata in parallel with data prefetch
+                async let metadataTask = Task {
+                    do {
+                        logger.debug("📊 [\(videoId)] Pre-loading metadata during prefetch")
+                        try await loadInitialMetadata(for: asset)
+                        await assetCache.setObject(asset, forKey: url as NSURL)
+                        logger.success("✅ [\(videoId)] Successfully pre-loaded metadata during prefetch")
+                    } catch {
+                        logger.error("❌ [\(videoId)] Failed to pre-load metadata: \(error.localizedDescription)")
+                        throw error
+                    }
+                }
+                
+                // Prefetch initial data range
                 let session = URLSession.shared
                 var request = URLRequest(url: url)
                 request.setValue("bytes=0-\(rangeSize)", forHTTPHeaderField: "Range")
@@ -440,18 +482,20 @@ actor VideoAssetLoader {
                     await updatePreloadedData(url: url, data: data[...])
                     logger.success("✅ [\(videoId)] Successfully prefetched \(data.count) bytes from URL: \(url)")
                     
-                    // Start loading the rest of the video in the background if high priority
+                    // Wait for metadata loading to complete
+                    _ = try await metadataTask.value
+                    
+                    // If high priority, start loading the rest of the video
                     if priority == .high {
                         Task {
+                            logger.debug("🔄 [\(videoId)] Starting full asset load for high priority video")
                             try await loadAsset(for: url)
                         }
                     }
                 } else {
-                    logger.warning("⚠️ [\(videoId)] Server doesn't support range requests for URL: \(url), falling back")
-                    // Create and cache the full asset but don't prepare it for playback
-                    let asset = AVURLAsset(url: url)
-                    try await loadInitialMetadata(for: asset)
-                    assetCache.setObject(asset, forKey: url as NSURL)
+                    logger.warning("⚠️ [\(videoId)] Server doesn't support range requests for URL: \(url), falling back to full load")
+                    // Wait for metadata loading to complete
+                    _ = try await metadataTask.value
                 }
             } catch {
                 logger.error("❌ [\(videoId)] Prefetch failed for URL \(url): \(error.localizedDescription)")
@@ -889,19 +933,17 @@ struct VideoPlayerView: View {
             }
         })
         Task {
-            // Load and play video
-            logger.debug("🎬 Loading and playing video: \(video.stableId)")
-            await playerViewModel.loadAndPlayVideo()
+            // Load video metadata, creator info, and stats in parallel
+            logger.debug("🎬 Starting parallel loading of video data for \(video.stableId)")
             
-            // Load creator if needed
-            if creator == nil {
-                logger.debug("👤 Fetching creator information for video \(video.stableId)")
-                await feedViewModel.fetchCreators(for: [video])
-                creator = feedViewModel.getCreator(for: video)
-                if let creator = creator {
-                    logger.debug("👤 Creator loaded for video \(video.stableId): \(creator.displayName)")
-                }
-            }
+            async let videoLoadTask = playerViewModel.loadAndPlayVideo()
+            async let creatorLoadTask = loadCreatorIfNeeded()
+            async let statsLoadTask = loadInitialStats()
+            
+            // Wait for all tasks to complete
+            try await videoLoadTask
+            await creatorLoadTask
+            await statsLoadTask
             
             // Load balance and tip history
             logger.debug("💰 Loading balance and tip history for video \(video.stableId)")
@@ -918,11 +960,38 @@ struct VideoPlayerView: View {
         }
     }
     
+    private func loadCreatorIfNeeded() async {
+        if creator == nil {
+            logger.debug("👤 Fetching creator information for video \(video.stableId)")
+            await feedViewModel.fetchCreators(for: [video])
+            creator = feedViewModel.getCreator(for: video)
+            if let creator = creator {
+                logger.debug("👤 Creator loaded for video \(video.stableId): \(creator.displayName)")
+            }
+        }
+    }
+    
+    private func loadInitialStats() async {
+        do {
+            logger.debug("📊 Loading initial stats for video \(video.stableId)")
+            let views = try await feedViewModel.fetchVideoStats(for: video)
+            await MainActor.run {
+                currentViewCount = views + 1  // Optimistically add 1 to the view count
+                logger.debug("📊 Initial view count loaded and incremented: \(views) + 1")
+            }
+        } catch {
+            logger.error("❌ Failed to load initial stats: \(error.localizedDescription)")
+        }
+    }
+    
     private func handleVisibilityChange(_ newValue: Bool) {
         logger.debug("👁️ Visibility changed to \(newValue) for video \(video.stableId)")
         if newValue {
             // Start tracking viewing time when video becomes visible
-            viewingStartTime = Date()
+            if viewingStartTime == nil {
+                viewingStartTime = Date()
+                logger.debug("⏱️ Started view tracking at \(viewingStartTime!)")
+            }
             
             // Immediately update player visibility for autoplay
             playerViewModel.updateVisibility(true)
@@ -934,44 +1003,36 @@ struct VideoPlayerView: View {
                     playerViewModel.ensurePlayback()
                 }
             }
-            
-            // Update stats after 3 seconds of viewing
-            Task {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3 second delay
-                if isVisible && !hasUpdatedStats {
-                    do {
-                        logger.debug("📊 Updating video stats after 3 seconds of viewing for \(video.stableId)")
-                        try await feedViewModel.updateVideoStats(video: video)
-                        hasUpdatedStats = true
-                        
-                        // Update view count from updated video
-                        if let updatedVideo = feedViewModel.videos.first(where: { $0.stableId == video.stableId }) {
-                            withAnimation {
-                                currentViewCount = updatedVideo.views
-                                logger.debug("👀 Updated view count for \(video.stableId): \(currentViewCount)")
-                            }
-                        } else if let updatedVideo = feedViewModel.searchResults.first(where: { $0.stableId == video.stableId }) {
-                            withAnimation {
-                                currentViewCount = updatedVideo.views
-                                logger.debug("👀 Updated view count from search results for \(video.stableId): \(currentViewCount)")
-                            }
-                        }
-                    } catch {
-                        logger.error("❌ Error updating video stats for \(video.stableId): \(error)")
-                    }
-                }
-            }
         } else {
-            viewingStartTime = nil
-            
-            // Add longer delay before cleanup
-            Task {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1.0 second delay
-                if !isVisible {  // Check if still invisible after delay
-                    playerViewModel.updateVisibility(false)
-                    logger.debug("👁️ Player visibility updated to false after delay for \(video.stableId)")
-                }
+            // Reset viewing time tracking when video becomes invisible
+            if viewingStartTime != nil {
+                logger.debug("⏱️ Resetting view tracking - video became invisible")
+                viewingStartTime = nil
             }
+            playerViewModel.updateVisibility(false)
+        }
+    }
+    
+    private func updateVideoStats() async {
+        do {
+            logger.info("📊 Starting view count update for video: \(video.stableId)")
+            logger.debug("Current view count before Firebase update: \(currentViewCount)")
+            logger.debug("Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
+            logger.debug("Stats document ID: \(video.statsDocumentId)")
+            
+            // Update Firebase
+            try await feedViewModel.updateVideoStats(video: video)
+            hasUpdatedStats = true
+            
+            // No need to update the UI since we already incremented optimistically
+            logger.success("✅ View count updated successfully in Firebase")
+        } catch {
+            // If Firebase update fails, revert the optimistic update
+            await MainActor.run {
+                currentViewCount -= 1
+                logger.debug("📊 Reverted optimistic update due to error")
+            }
+            logger.error("❌ Failed to update view count: \(error.localizedDescription)")
         }
     }
     
@@ -1079,6 +1140,13 @@ struct VideoPlayerView: View {
         }
         .onChange(of: isVisible, perform: handleVisibilityChange)
         .onChange(of: showEditSheet, perform: handleEditSheetChange)
+        .onChange(of: playerViewModel.isPlaying) { isPlaying in
+            if isPlaying && !hasUpdatedStats {
+                Task {
+                    await updateVideoStats()
+                }
+            }
+        }
         .onReceive(tipViewModel.$sentTips) { newTips in
             if let videoId = video.id {
                 totalTips = newTips.filter { $0.videoID == videoId }.count

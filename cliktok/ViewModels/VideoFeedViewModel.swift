@@ -254,15 +254,15 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func updateVideoStats(video: Video) async throws {
-        print("VideoFeedViewModel: Starting stats update for video: \(video.stableId)")
+        print("VideoFeedViewModel: -------- Starting Stats Update --------")
+        print("VideoFeedViewModel: Updating stats for video: \(video.stableId)")
         print("VideoFeedViewModel: Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
         print("VideoFeedViewModel: Stats document ID: \(video.statsDocumentId)")
+        print("VideoFeedViewModel: Collection: \(video.isArchiveVideo ? "archive_video_stats" : "video_stats")")
         
         let db = Firestore.firestore()
         let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
         let statsRef = db.collection(collectionName).document(video.statsDocumentId)
-        
-        print("VideoFeedViewModel: Using collection: \(collectionName)")
         
         do {
             // Try to get the document first
@@ -270,49 +270,61 @@ class VideoFeedViewModel: ObservableObject {
             let docSnapshot = try await statsRef.getDocument()
             
             if docSnapshot.exists {
-                print("VideoFeedViewModel: Existing stats document found, updating view count")
+                print("VideoFeedViewModel: Existing stats found. Current data: \(String(describing: docSnapshot.data()))")
                 // Document exists, update it
                 try await statsRef.updateData([
                     "views": FieldValue.increment(Int64(1)),
                     "updatedAt": FieldValue.serverTimestamp()
                 ])
+                print("VideoFeedViewModel: Successfully incremented view count")
                 
                 // Get the updated document to sync local state
                 let updatedDoc = try await statsRef.getDocument()
                 let updatedData = updatedDoc.data() ?? [:]
+                print("VideoFeedViewModel: Updated document data: \(updatedData)")
+                
                 let updatedViews = updatedData["views"] as? Int ?? 0
+                print("VideoFeedViewModel: New view count: \(updatedViews)")
                 
                 // Update local video objects
-                if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                    videos[index].views = updatedViews
+                await MainActor.run {
+                    if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                        print("VideoFeedViewModel: Updating main array at index \(index)")
+                        videos[index].views = updatedViews
+                    }
+                    if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                        print("VideoFeedViewModel: Updating search results at index \(index)")
+                        searchResults[index].views = updatedViews
+                    }
                 }
-                if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                    searchResults[index].views = updatedViews
-                }
-                
-                print("VideoFeedViewModel: Successfully updated stats for video: \(video.stableId)")
-                print("VideoFeedViewModel: Current document data: \(updatedData)")
             } else {
                 print("VideoFeedViewModel: No existing stats document found, creating new one")
                 // Document doesn't exist, create it with initial stats
-                try await statsRef.setData([
+                let initialData: [String: Any] = [
                     "views": 1,
                     "likes": 0,
                     "createdAt": FieldValue.serverTimestamp(),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ])
+                    "updatedAt": FieldValue.serverTimestamp(),
+                    "videoId": video.statsDocumentId  // Add this to help with tracking
+                ]
+                try await statsRef.setData(initialData)
+                print("VideoFeedViewModel: Created initial stats document with data: \(initialData)")
                 
                 // Update local video objects with initial view count of 1
-                if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                    videos[index].views = 1
+                await MainActor.run {
+                    if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                        print("VideoFeedViewModel: Updating main array at index \(index)")
+                        videos[index].views = 1
+                    }
+                    if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                        print("VideoFeedViewModel: Updating search results at index \(index)")
+                        searchResults[index].views = 1
+                    }
                 }
-                if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                    searchResults[index].views = 1
-                }
-                
-                print("VideoFeedViewModel: Created initial stats document for video: \(video.stableId)")
             }
+            print("VideoFeedViewModel: -------- Stats Update Complete --------")
         } catch {
+            print("VideoFeedViewModel: -------- Stats Update Failed --------")
             print("VideoFeedViewModel: Error updating video stats: \(error.localizedDescription)")
             print("VideoFeedViewModel: Full error details: \(error)")
             throw error
@@ -546,6 +558,34 @@ class VideoFeedViewModel: ObservableObject {
         } catch {
             print("Error updating video \(videoId): \(error)")
             isLoading = false
+            throw error
+        }
+    }
+    
+    @MainActor
+    func fetchVideoStats(for video: Video) async throws -> Int {
+        print("VideoFeedViewModel: -------- Starting Single Video Stats Fetch --------")
+        print("VideoFeedViewModel: Fetching stats for video: \(video.stableId)")
+        print("VideoFeedViewModel: Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
+        print("VideoFeedViewModel: Stats document ID: \(video.statsDocumentId)")
+        
+        let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
+        let statsRef = db.collection(collectionName).document(video.statsDocumentId)
+        
+        do {
+            let docSnapshot = try await statsRef.getDocument()
+            if docSnapshot.exists {
+                let data = docSnapshot.data() ?? [:]
+                let views = data["views"] as? Int ?? 0
+                print("VideoFeedViewModel: Found stats - views: \(views)")
+                return views
+            } else {
+                print("VideoFeedViewModel: No stats document found")
+                return 0
+            }
+        } catch {
+            print("VideoFeedViewModel: Error fetching stats: \(error)")
+            print("VideoFeedViewModel: Full error details: \(error)")
             throw error
         }
     }
