@@ -37,7 +37,10 @@ actor AISearchService {
             return client
         }
         
-        guard let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !apiKey.isEmpty else {
+        let apiKey: String
+        do {
+            apiKey = try Configuration.openAIApiKey
+        } catch {
             #if DEBUG
             print("""
             ⚠️ OpenAI API key not found!

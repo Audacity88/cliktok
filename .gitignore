@@ -2,14 +2,20 @@
 #
 # gitignore contributors: remember to update Global/Xcode.gitignore, Objective-C.gitignore & Swift.gitignore
 
-cliktok/GoogleService-Info.plist
-*.env
-
 ## User settings
 xcuserdata/
+*.xcuserstate
+*.xcscheme
 
-## Obj-C/Swift specific
-*.hmap
+## Env files
+.env
+.env.*
+*.env
+env/
+.env.local
+.env.development
+.env.test
+.env.production
 
 ## App packaging
 *.ipa
@@ -21,59 +27,51 @@ timeline.xctimeline
 playground.xcworkspace
 
 # Swift Package Manager
-#
-# Add this line if you want to avoid checking in source code from Swift Package Manager dependencies.
-# Packages/
-# Package.pins
-# Package.resolved
-# *.xcodeproj
-#
-# Xcode automatically generates this directory with a .xcworkspacedata file and xcuserdata
-# hence it is not needed unless you have added a package configuration file to your project
-# .swiftpm
-
 .build/
+Packages/
+Package.pins
+Package.resolved
+*.xcodeproj
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+*.xcworkspace
+!*.xcworkspace/contents.xcworkspacedata
 
 # CocoaPods
-#
-# We recommend against adding the Pods directory to your .gitignore. However
-# you should judge for yourself, the pros and cons are mentioned at:
-# https://guides.cocoapods.org/using/using-cocoapods.html#should-i-check-the-pods-directory-into-source-control
-#
-# Pods/
-#
-# Add this line if you want to avoid checking in source code from the Xcode workspace
-# *.xcworkspace
+Pods/
+*.xcconfig
 
 # Carthage
-#
-# Add this line if you want to avoid checking in source code from Carthage dependencies.
-# Carthage/Checkouts
-
 Carthage/Build/
 
-# Accio dependency management
-Dependencies/
-.accio/
+# Accidental IDE files
+.idea/
+*.swp
+*.swo
+*~
 
-# fastlane
-#
-# It is recommended to not store the screenshots in the git repo.
-# Instead, use fastlane to re-generate the screenshots whenever they are needed.
-# For more information about the recommended setup visit:
-# https://docs.fastlane.tools/best-practices/source-control/#source-control
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots/**/*.png
-fastlane/test_output
+# Firebase
+GoogleService-Info.plist
+firebase-debug.log
+.firebase/
 
-# Code Injection
-#
-# After new code Injection tools there's a generated folder /iOSInjectionProject
-# https://github.com/johnno1962/injectionforxcode
-
-iOSInjectionProject/
-
-# macOS
-.DS_Store 
+# Other sensitive files
+*/xcshareddata/xcschemes/*
+*.keystore
+*.jks
+*.p12
+*.key
+*.mobileprovision
+*.provisionprofile
+*.cer
+secrets.xcconfig 
