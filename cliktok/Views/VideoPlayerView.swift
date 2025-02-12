@@ -3,6 +3,7 @@ import AVKit
 import AVFoundation
 import FirebaseFirestore
 import FirebaseAuth
+import Network
 
 #if os(iOS)
 
@@ -14,6 +15,39 @@ actor VideoAssetLoader {
         case high
         case medium
         case low
+        
+        var prefetchSize: Int {
+            switch self {
+            case .high: return 4 * 1024 * 1024  // 4MB
+            case .medium: return 2 * 1024 * 1024 // 2MB
+            case .low: return 1 * 1024 * 1024   // 1MB
+            }
+        }
+    }
+    
+    enum VideoQuality {
+        case auto
+        case low    // 360p
+        case medium // 720p
+        case high   // 1080p
+        
+        var maxBitrate: Int {
+            switch self {
+            case .auto: return 0 // Will be determined dynamically
+            case .low: return 500_000    // 500 Kbps for faster initial load
+            case .medium: return 1_500_000 // 1.5 Mbps
+            case .high: return 3_000_000   // 3 Mbps
+            }
+        }
+        
+        var preferredMaximumResolution: AVAssetReferenceRestrictions {
+            switch self {
+            case .auto, .high:
+                return [] // No restrictions for high quality
+            case .medium, .low:
+                return .init(rawValue: 1 << 0) // Basic restriction level for faster loading
+            }
+        }
     }
     
     private let cache: URLCache
@@ -21,6 +55,9 @@ actor VideoAssetLoader {
     private var loadingAssets: [URL: Task<AVAsset, Error>] = [:]
     private var prefetchTasks: [URL: Task<Void, Never>] = [:]
     private var preloadedData: [URL: Data] = [:]
+    private var currentQuality: VideoQuality = .low // Start with low quality for faster initial load
+    private let networkMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.cliktok.network")
     
     private init() {
         print("VideoAssetLoader: Initializing with 512MB cache")
@@ -29,14 +66,49 @@ actor VideoAssetLoader {
                             diskCapacity: cacheSizeInBytes,
                             diskPath: "video_cache")
         
-        // Configure asset cache
-        assetCache.countLimit = 10
-        assetCache.totalCostLimit = 256 * 1024 * 1024
+        // Configure asset cache with larger limits
+        assetCache.countLimit = 20
+        assetCache.totalCostLimit = 512 * 1024 * 1024 // 512MB
+        
+        setupNetworkMonitoring()
+    }
+    
+    private func setupNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            // Adjust quality based on network conditions
+            let quality: VideoQuality
+            switch path.status {
+            case .satisfied:
+                if path.isExpensive {
+                    quality = .medium
+                } else if path.isConstrained {
+                    quality = .low
+                } else {
+                    quality = .high
+                }
+            default:
+                quality = .low
+            }
+            
+            // Update quality in an actor-isolated way
+            Task { [weak self] in
+                await self?.updateQuality(quality)
+            }
+        }
+        networkMonitor.start(queue: monitorQueue)
+    }
+    
+    private func updateQuality(_ quality: VideoQuality) {
+        currentQuality = quality
+        print("VideoAssetLoader: Quality updated to \(quality)")
     }
     
     func loadAsset(for url: URL) async throws -> AVAsset {
         let startTime = Date()
         print("VideoAssetLoader: Starting to load asset for URL: \(url)")
+        
+        // Start prefetching immediately
+        prefetchData(for: url, priority: .high)
         
         // Return cached asset if available
         if let cachedAsset = assetCache.object(forKey: url as NSURL) {
@@ -52,29 +124,35 @@ actor VideoAssetLoader {
         
         print("VideoAssetLoader: Creating new loading task")
         let task = Task<AVAsset, Error> {
-            // If we have preloaded data, create an asset from it
-            if let preloadedData = preloadedData[url] {
-                print("VideoAssetLoader: Using preloaded data")
-                let asset = try await createAssetFromData(preloadedData, for: url)
-                assetCache.setObject(asset, forKey: url as NSURL)
-                return asset
-            }
-            
-            // Create asset with streaming optimizations
+            // Create asset with optimized configuration
+            let quality = currentQuality
             let assetOptions: [String: Any] = [
                 AVURLAssetAllowsExpensiveNetworkAccessKey: true,
-                AVURLAssetPreferPreciseDurationAndTimingKey: false
+                AVURLAssetPreferPreciseDurationAndTimingKey: false,
+                AVURLAssetReferenceRestrictionsKey: quality.preferredMaximumResolution.rawValue,
+                "preferredPeakBitRate": NSNumber(value: quality.maxBitrate),
+                "AVURLAssetHTTPHeaderFieldsKey": [
+                    "Range": "bytes=0-",
+                    "Cache-Control": "max-stale=3600"
+                ]
             ]
             
-            print("VideoAssetLoader: Creating streaming asset")
+            print("VideoAssetLoader: Creating streaming asset with quality: \(quality)")
             let asset = AVURLAsset(url: url, options: assetOptions)
             
-            // Load enough data to establish playback
+            // Load essential metadata asynchronously
             print("VideoAssetLoader: Loading initial metadata")
             try await loadInitialMetadata(for: asset)
             
+            // Cache the asset
             assetCache.setObject(asset, forKey: url as NSURL)
             print("VideoAssetLoader: Asset prepared in \(Date().timeIntervalSince(startTime))s")
+            
+            // Upgrade quality after initial load if network allows
+            Task { [weak self] in
+                await self?.upgradeQualityIfPossible()
+            }
+            
             return asset
         }
         
@@ -91,51 +169,64 @@ actor VideoAssetLoader {
         }
     }
     
-    private func loadInitialMetadata(for asset: AVURLAsset) async throws {
-        print("VideoAssetLoader: Loading essential metadata")
-        // Load only essential properties without preparing for playback
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                // Only load tracks info without preparing them
-                let tracks = try await asset.load(.tracks)
-                guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
-                    throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No video track found"])
-                }
-                
-                // Only load format descriptions without preparing the track
-                let descriptions = try await videoTrack.load(.formatDescriptions)
-                guard !descriptions.isEmpty else {
-                    throw NSError(domain: "VideoLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "No format descriptions found"])
-                }
-            }
+    private func prefetchData(for url: URL, priority: PrefetchPriority) {
+        // Cancel any existing prefetch task
+        prefetchTasks[url]?.cancel()
+        
+        let task = Task { [weak self] in
+            guard let self = self else { return }
             
-            // Wait for metadata loading to complete
-            try await group.waitForAll()
+            do {
+                let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 10)
+                let (data, _) = try await URLSession.shared.data(for: request)
+                
+                // Store only the first portion for quick start
+                let prefetchSize = min(priority.prefetchSize, data.count)
+                await self.updatePreloadedData(url: url, data: data.prefix(prefetchSize))
+                
+                print("VideoAssetLoader: Prefetched \(prefetchSize) bytes for \(url)")
+            } catch {
+                print("VideoAssetLoader: Prefetch failed for \(url): \(error)")
+            }
         }
-        print("VideoAssetLoader: Metadata loaded successfully")
+        
+        prefetchTasks[url] = task
     }
     
-    private func createAssetFromData(_ data: Data, for url: URL) async throws -> AVAsset {
-        let fileManager = FileManager.default
-        let cacheDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let fileURL = cacheDir.appendingPathComponent(url.lastPathComponent)
+    private func updatePreloadedData(url: URL, data: Data.SubSequence) {
+        preloadedData[url] = Data(data)
+    }
+    
+    private func upgradeQualityIfPossible() async {
+        let path = networkMonitor.currentPath
         
-        // Write data to temporary file
-        try data.write(to: fileURL)
-        
-        // Create asset from file
-        let asset = AVURLAsset(url: fileURL)
-        
-        // Load essential metadata
-        try await loadInitialMetadata(for: asset)
-        
-        // Schedule cleanup
-        Task {
-            try? await Task.sleep(nanoseconds: 30 * NSEC_PER_SEC)
-            try? fileManager.removeItem(at: fileURL)
+        let newQuality: VideoQuality
+        if path.status == .satisfied {
+            if path.isExpensive {
+                newQuality = .medium
+            } else if path.isConstrained {
+                newQuality = .low
+            } else {
+                newQuality = .high
+            }
+        } else {
+            return // Keep current quality
         }
         
-        return asset
+        await updateQuality(newQuality)
+    }
+    
+    private func loadInitialMetadata(for asset: AVURLAsset) async throws {
+        // Load only the most essential metadata in parallel
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                let tracks = try await asset.load(.tracks)
+                if let videoTrack = try await asset.loadTracks(withMediaType: .video).first {
+                    _ = try await videoTrack.load(.formatDescriptions)
+                }
+            }
+        }
+        print("VideoAssetLoader: Metadata loaded successfully")
     }
     
     func prefetchWithPriority(for url: URL, priority: PrefetchPriority) async {
@@ -148,28 +239,34 @@ actor VideoAssetLoader {
             return
         }
         
-        // For high priority, load more initial data
-        let rangeSize = priority == .high ? 2 * 1024 * 1024 : 1024 * 1024 // 2MB for high priority
+        // Determine prefetch size based on priority and quality
+        let rangeSize = priority == .high ? 4 * 1024 * 1024 : 2 * 1024 * 1024 // 4MB for high priority
         
         let task = Task {
             do {
                 let session = URLSession.shared
                 var request = URLRequest(url: url)
                 request.setValue("bytes=0-\(rangeSize)", forHTTPHeaderField: "Range")
+                request.cachePolicy = .returnCacheDataElseLoad
                 
                 print("VideoAssetLoader: Downloading initial \(rangeSize/1024)KB")
                 let (data, response) = try await session.data(for: request)
                 
-                // If we got a 206 Partial Content response, store the data
                 if let httpResponse = response as? HTTPURLResponse,
                    httpResponse.statusCode == 206 {
-                    preloadedData[url] = data
+                    await updatePreloadedData(url: url, data: data[...])
                     print("VideoAssetLoader: Successfully prefetched \(data.count) bytes")
+                    
+                    // Start loading the rest of the video in the background if high priority
+                    if priority == .high {
+                        Task {
+                            try await loadAsset(for: url)
+                        }
+                    }
                 } else {
                     print("VideoAssetLoader: Server doesn't support range requests, falling back")
                     // Create and cache the full asset but don't prepare it for playback
                     let asset = AVURLAsset(url: url)
-                    // Only load essential metadata without preparing for playback
                     try await loadInitialMetadata(for: asset)
                     assetCache.setObject(asset, forKey: url as NSURL)
                 }
@@ -189,6 +286,7 @@ actor VideoAssetLoader {
         loadingAssets[url] = nil
         prefetchTasks[url]?.cancel()
         prefetchTasks[url] = nil
+        cache.removeCachedResponse(for: URLRequest(url: url))
     }
     
     func clearCache() {
@@ -196,6 +294,13 @@ actor VideoAssetLoader {
         assetCache.removeAllObjects()
         preloadedData.removeAll()
         cache.removeAllCachedResponses()
+    }
+    
+    deinit {
+        networkMonitor.cancel()
+        for task in prefetchTasks.values {
+            task.cancel()
+        }
     }
 }
 

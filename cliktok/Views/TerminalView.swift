@@ -1,5 +1,174 @@
 import SwiftUI
 
+// MARK: - Terminal Content View
+private struct TerminalContentView: View {
+    @Binding var conversation: [(role: String, content: String)]
+    @Binding var userInput: String
+    @Binding var isProcessing: Bool
+    @Binding var showCursor: Bool
+    let processCommand: () -> Void
+    
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    // Welcome Message
+                    WelcomeMessageView()
+                    
+                    // Conversation History
+                    ConversationHistoryView(conversation: conversation)
+                    
+                    // Current Input Line
+                    InputLineView(
+                        userInput: $userInput,
+                        isProcessing: isProcessing,
+                        showCursor: showCursor,
+                        processCommand: processCommand
+                    )
+                    .id("inputLine")
+                }
+                .padding()
+            }
+            .onChange(of: conversation.count) { _ in
+                withAnimation {
+                    proxy.scrollTo("inputLine")
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Welcome Message View
+private struct WelcomeMessageView: View {
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text("Welcome to CliktokOS v1.0")
+                .foregroundColor(.green)
+                .font(.system(.body, design: .monospaced))
+            
+            Text("Type 'help' for available commands")
+                .foregroundColor(.green)
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+}
+
+// MARK: - Conversation History View
+private struct ConversationHistoryView: View {
+    let conversation: [(role: String, content: String)]
+    
+    var body: some View {
+        ForEach(conversation.indices, id: \.self) { index in
+            VStack(alignment: .leading) {
+                if conversation[index].role == "user" {
+                    Text("> \(conversation[index].content)")
+                        .foregroundColor(.green)
+                } else {
+                    Text(conversation[index].content)
+                        .foregroundColor(.green)
+                }
+            }
+            .font(.system(.body, design: .monospaced))
+        }
+    }
+}
+
+// MARK: - Input Line View
+private struct InputLineView: View {
+    @Binding var userInput: String
+    @FocusState private var isFocused: Bool
+    let isProcessing: Bool
+    let showCursor: Bool
+    let processCommand: () -> Void
+    
+    var body: some View {
+        HStack(spacing: 2) {
+            Text(">")
+                .foregroundColor(.green)
+                .font(.system(.body, design: .monospaced))
+            
+            TextField("", text: $userInput)
+                .textFieldStyle(.plain)
+                .foregroundColor(.green)
+                .font(.system(.body, design: .monospaced))
+                .background(Color.clear)
+                .accentColor(.green)
+                .onSubmit(processCommand)
+                .submitLabel(.return)
+                .focused($isFocused)
+                .onAppear {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        isFocused = true
+                    }
+                }
+                .onDisappear {
+                    isFocused = false
+                }
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            
+            if showCursor && !isProcessing {
+                Rectangle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 20)
+            }
+        }
+    }
+}
+
+// MARK: - Menu Overlay View
+private struct MenuOverlayView: View {
+    @Binding var showMenu: Bool
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.01)
+                .edgesIgnoringSafeArea(.all)
+                .onTapGesture {
+                    showMenu = false
+                }
+            
+            VStack(spacing: 20) {
+                MenuButton(title: "SUBMISSIONS", icon: "house.fill", action: { showMenu = false })
+                MenuButton(title: "ARCHIVE", icon: "tv", action: { showMenu = false })
+                MenuButton(title: "SEARCH", icon: "magnifyingglass.circle.fill", action: { showMenu = false })
+                MenuButton(title: "WALLET", icon: "dollarsign.circle.fill", action: { showMenu = false })
+                MenuButton(title: "UPLOAD", icon: "plus.square.fill", action: { showMenu = false })
+                MenuButton(title: "PROFILE", icon: "person.fill", action: { showMenu = false })
+            }
+            .padding()
+            .background(Color.black.opacity(0.9))
+        }
+    }
+}
+
+// MARK: - Menu Button
+private struct MenuButton: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: icon)
+                    .foregroundColor(.green)
+                Text(title)
+                    .foregroundColor(.green)
+                    .font(.system(.body, design: .monospaced))
+            }
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(Color.black)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.green, lineWidth: 1)
+            )
+        }
+    }
+}
+
+// MARK: - Main Terminal View
 struct TerminalView: View {
     @State private var userInput = ""
     @State private var conversation: [(role: String, content: String)] = []
@@ -17,112 +186,19 @@ struct TerminalView: View {
             Color.black.edgesIgnoringSafeArea(.all)
             
             VStack(spacing: 0) {
-                // Terminal Header
                 RetroStatusBar()
                 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            // Welcome Message
-                            Text("Welcome to CliktokOS v1.0")
-                                .foregroundColor(.green)
-                                .font(.system(.body, design: .monospaced))
-                            
-                            Text("Type 'help' for available commands")
-                                .foregroundColor(.green)
-                                .font(.system(.body, design: .monospaced))
-                            
-                            // Conversation History
-                            ForEach(conversation.indices, id: \.self) { index in
-                                VStack(alignment: .leading) {
-                                    if conversation[index].role == "user" {
-                                        Text("> \(conversation[index].content)")
-                                            .foregroundColor(.green)
-                                    } else {
-                                        Text(conversation[index].content)
-                                            .foregroundColor(.green)
-                                    }
-                                }
-                                .font(.system(.body, design: .monospaced))
-                            }
-                            
-                            // Current Input Line
-                            HStack(spacing: 2) {
-                                Text(">")
-                                    .foregroundColor(.green)
-                                    .font(.system(.body, design: .monospaced))
-                                
-                                TextField("", text: $userInput)
-                                    .textFieldStyle(.plain)
-                                    .foregroundColor(.green)
-                                    .font(.system(.body, design: .monospaced))
-                                    .background(Color.clear)
-                                    .accentColor(.green)
-                                    .onSubmit {
-                                        processCommand()
-                                    }
-                                    .submitLabel(.return)
-                                    .onAppear {
-                                        // Focus the text field when it appears
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                            UIApplication.shared.sendAction(#selector(UIResponder.becomeFirstResponder), to: nil, from: nil, for: nil)
-                                        }
-                                    }
-                                
-                                if showCursor && !isProcessing {
-                                    Rectangle()
-                                        .fill(Color.green)
-                                        .frame(width: 8, height: 20)
-                                }
-                            }
-                            .id("inputLine")
-                        }
-                        .padding()
-                    }
-                    .onChange(of: conversation.count) { _ in
-                        withAnimation {
-                            proxy.scrollTo("inputLine")
-                        }
-                    }
-                }
+                TerminalContentView(
+                    conversation: $conversation,
+                    userInput: $userInput,
+                    isProcessing: $isProcessing,
+                    showCursor: $showCursor,
+                    processCommand: processCommand
+                )
             }
             
-            // Menu Overlay
             if showMenu {
-                Color.black.opacity(0.01)  // Invisible overlay to catch taps
-                    .edgesIgnoringSafeArea(.all)
-                    .onTapGesture {
-                        showMenu = false
-                    }
-                
-                VStack(spacing: 20) {
-                    menuButton(title: "SUBMISSIONS", icon: "house.fill") {
-                        // Navigate to submissions
-                        showMenu = false
-                    }
-                    menuButton(title: "ARCHIVE", icon: "tv") {
-                        // Navigate to archive
-                        showMenu = false
-                    }
-                    menuButton(title: "SEARCH", icon: "sparkles.magnifyingglass") {
-                        // Navigate to search
-                        showMenu = false
-                    }
-                    menuButton(title: "WALLET", icon: "dollarsign.circle.fill") {
-                        // Navigate to wallet
-                        showMenu = false
-                    }
-                    menuButton(title: "UPLOAD", icon: "plus.square.fill") {
-                        // Navigate to upload
-                        showMenu = false
-                    }
-                    menuButton(title: "PROFILE", icon: "person.fill") {
-                        // Navigate to profile
-                        showMenu = false
-                    }
-                }
-                .padding()
-                .background(Color.black.opacity(0.9))
+                MenuOverlayView(showMenu: $showMenu)
             }
         }
         .onReceive(timer) { _ in
@@ -131,32 +207,12 @@ struct TerminalView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onEnded { _ in
-                    // Dismiss keyboard when tapping outside the text field
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 }
         )
         .task {
             await tipViewModel.loadBalance()
             await tipViewModel.loadTipHistory()
-        }
-    }
-    
-    private func menuButton(title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: icon)
-                    .foregroundColor(.green)
-                Text(title)
-                    .foregroundColor(.green)
-                    .font(.system(.body, design: .monospaced))
-            }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(Color.black)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.green, lineWidth: 1)
-            )
         }
     }
     

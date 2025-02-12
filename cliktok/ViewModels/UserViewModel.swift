@@ -50,18 +50,7 @@ class UserViewModel: ObservableObject {
         do {
             let docSnapshot = try await db.collection("users").document(userId).getDocument()
             if let data = docSnapshot.data() {
-                return User(
-                    id: userId,
-                    email: data["email"] as? String ?? Auth.auth().currentUser?.email ?? "",
-                    username: data["username"] as? String ?? "",
-                    displayName: data["displayName"] as? String ?? "",
-                    bio: data["bio"] as? String ?? "",
-                    profileImageURL: data["profileImageURL"] as? String,
-                    isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
-                    balance: data["balance"] as? Double ?? 0.0,
-                    userRole: UserRole(rawValue: data["userRole"] as? String ?? "") ?? .regular,
-                    companyName: data["companyName"] as? String
-                )
+                return try docSnapshot.data(as: User.self)
             }
         } catch {
             self.error = error

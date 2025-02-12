@@ -18,7 +18,7 @@ class VideoFeedViewModel: ObservableObject {
     
     // Archive user for Internet Archive videos
     private let archiveUser = User(
-        id: "archive_user",
+        id: nil,  // Don't set the ID directly
         email: "archive@archive.org",
         username: "internetarchive",
         displayName: "Internet Archive",
@@ -31,7 +31,7 @@ class VideoFeedViewModel: ObservableObject {
     )
     
     init() {
-        // Add archive user to creators
+        // Add archive user to creators with the correct key
         videoCreators["archive_user"] = archiveUser
     }
     
@@ -94,23 +94,7 @@ class VideoFeedViewModel: ObservableObject {
                 do {
                     let docSnapshot = try await db.collection("users").document(creatorId).getDocument()
                     if docSnapshot.exists {
-                        let data = docSnapshot.data()
-                        print("Raw user data: \(String(describing: data))")
-                        
-                        // Manual decoding
-                        if let data = data {
-                            let user = User(
-                                id: creatorId,
-                                email: data["email"] as? String ?? "",
-                                username: data["username"] as? String ?? "",
-                                displayName: data["displayName"] as? String ?? "",
-                                bio: data["bio"] as? String ?? "",
-                                profileImageURL: data["profileImageURL"] as? String,
-                                isPrivateAccount: data["isPrivateAccount"] as? Bool ?? false,
-                                balance: data["balance"] as? Double ?? 0.0,
-                                userRole: UserRole(rawValue: data["userRole"] as? String ?? "") ?? .regular,
-                                companyName: data["companyName"] as? String
-                            )
+                        if let user = try? docSnapshot.data(as: User.self) {
                             print("Successfully loaded creator: \(user.displayName)")
                             videoCreators[creatorId] = user
                         }
@@ -151,20 +135,7 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func updateVideoStats(video: Video, liked: Bool? = nil, viewed: Bool = true) async {
-        // For archive videos, use the archive identifier
-        let documentId: String
-        if video.userID == "archive_user" {
-            if let archiveId = video.archiveIdentifier {
-                documentId = archiveId
-            } else if let id = video.id {
-                documentId = id.replacingOccurrences(of: "archive_", with: "")
-            } else {
-                return
-            }
-        } else {
-            guard let id = video.id else { return }
-            documentId = id
-        }
+        let documentId = video.statsDocumentId
         
         do {
             var updates: [String: Any] = [:]
@@ -172,10 +143,10 @@ class VideoFeedViewModel: ObservableObject {
             if viewed {
                 updates["views"] = FieldValue.increment(Int64(1))
                 // Update local video object
-                if let index = videos.firstIndex(where: { $0.id == video.id }) {
+                if let index = videos.firstIndex(where: { $0.displayId == video.displayId }) {
                     videos[index].views += 1
                 }
-                if let index = searchResults.firstIndex(where: { $0.id == video.id }) {
+                if let index = searchResults.firstIndex(where: { $0.displayId == video.displayId }) {
                     searchResults[index].views += 1
                 }
             }
@@ -184,29 +155,10 @@ class VideoFeedViewModel: ObservableObject {
                 updates["likes"] = FieldValue.increment(Int64(liked ? 1 : -1))
             }
             
-            if !updates.isEmpty {
-                print("Updating video stats for \(documentId) with updates: \(updates)")
-                
-                // Use different collection based on video type
-                let collectionPath = video.userID == "archive_user" ? "archive_video_stats" : "videos"
-                
-                if video.userID == "archive_user" {
-                    // For archive videos, create or update the stats document
-                    let statsRef = db.collection(collectionPath).document(documentId)
-                    // First check if document exists
-                    let docSnapshot = try await statsRef.getDocument()
-                    if docSnapshot.exists {
-                        try await statsRef.updateData(updates)
-                    } else {
-                        try await statsRef.setData(updates)
-                    }
-                } else {
-                    // For regular videos, update the video document
-                    try await db.collection(collectionPath).document(documentId).updateData(updates)
-                }
-                
-                print("Successfully updated video stats")
-            }
+            // Use the appropriate collection based on video type
+            let collectionPath = video.userID == "archive_user" ? "archive_video_stats" : "videos"
+            
+            try await db.collection(collectionPath).document(documentId).updateData(updates)
         } catch {
             print("Error updating video stats: \(error.localizedDescription)")
         }
@@ -336,7 +288,7 @@ class VideoFeedViewModel: ObservableObject {
                         print("Created archive video: \(doc.title ?? "Untitled") with URL: \(videoURL), views: \(views), likes: \(likes)")
                         
                         return Video(
-                            id: "archive_\(doc.identifier)",
+                            id: nil,
                             archiveIdentifier: doc.identifier,
                             userID: "archive_user",
                             videoURL: videoURL,

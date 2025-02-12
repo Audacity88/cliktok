@@ -57,7 +57,7 @@ struct AISearchView: View {
     private var aiSearchHeader: some View {
         VStack(spacing: 12) {
             HStack {
-                Image(systemName: "sparkles.magnifyingglass")
+                Image(systemName: "magnifyingglass.circle.fill")
                     .foregroundColor(.gray)
                 
                 TextField("Ask me to find videos...", text: $viewModel.searchQuery)
@@ -135,7 +135,7 @@ struct AISearchView: View {
             LazyVStack(spacing: 16) {
                 ForEach(viewModel.searchResults, id: \.id) { archiveVideo in
                     let video = Video(
-                        id: "archive_\(archiveVideo.id)",
+                        id: nil,
                         archiveIdentifier: archiveVideo.id,
                         userID: "archive_user",
                         videoURL: archiveVideo.videoURL,
@@ -174,7 +174,7 @@ struct AISearchView: View {
     
     private var placeholderView: some View {
         VStack(spacing: 20) {
-            Image(systemName: searchMode == .ai ? "sparkles.magnifyingglass" : "number.magnifyingglass")
+            Image(systemName: searchMode == .ai ? "magnifyingglass.circle.fill" : "number.magnifyingglass")
                 .font(.system(size: 60))
                 .foregroundColor(.gray)
             Text(searchMode == .ai ? 

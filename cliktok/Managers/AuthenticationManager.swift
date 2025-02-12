@@ -1,61 +1,70 @@
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import OSLog
 
 @MainActor
 class AuthenticationManager: ObservableObject {
     static let shared = AuthenticationManager()
+    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "AuthenticationManager")
     
     @Published var isAuthenticated = false
     @Published var userEmail: String?
     @Published var isAnonymous = false
     @Published var isMarketer = false {
         didSet {
-            if oldValue != isMarketer {
-                print("AuthManager: Marketer status changed to: \(isMarketer)")
+            if oldValue != self.isMarketer {
+                logger.debug("AuthManager: Marketer status changed to: \(self.isMarketer)")
                 NotificationCenter.default.post(name: .init("UserRoleChanged"), object: nil)
             }
         }
     }
     
     private let db = Firestore.firestore()
+    private var stateListener: AuthStateDidChangeListenerHandle?
     
     var currentUser: FirebaseAuth.User? {
         Auth.auth().currentUser
     }
     
     private init() {
-        Auth.auth().addStateDidChangeListener { [weak self] _, user in
+        setupAuthStateListener()
+    }
+    
+    private func setupAuthStateListener() {
+        stateListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             Task { @MainActor in
-                self?.isAuthenticated = user != nil
-                self?.userEmail = user?.email
-                self?.isAnonymous = user?.isAnonymous ?? false
+                guard let self = self else { return }
+                self.logger.debug("Auth state changed. User: \(user?.uid ?? "nil")")
+                
+                self.isAuthenticated = user != nil
+                self.userEmail = user?.email
+                self.isAnonymous = user?.isAnonymous ?? false
+                
                 if let user = user {
-                    await self?.checkIfMarketer(userId: user.uid)
+                    await self.checkIfMarketer(userId: user.uid)
                 } else {
-                    self?.isMarketer = false
+                    self.isMarketer = false
                 }
             }
         }
     }
     
+    deinit {
+        if let listener = stateListener {
+            Auth.auth().removeStateDidChangeListener(listener)
+        }
+    }
+    
     private func checkIfMarketer(userId: String) async {
         do {
-            print("AuthManager: Checking marketer status for user: \(userId)")
-            let docRef = db.collection("users").document(userId)
-            let document = try await docRef.getDocument()
-            
-            if let data = document.data() {
-                print("AuthManager: User data: \(data)")
-                let userRole = data["userRole"] as? String
-                self.isMarketer = userRole == UserRole.marketer.rawValue
-                print("AuthManager: Set marketer status to: \(self.isMarketer)")
-            } else {
-                print("AuthManager: No user data found")
-                self.isMarketer = false
+            let docSnapshot = try await db.collection("users").document(userId).getDocument()
+            if let data = docSnapshot.data(), let userRole = data["userRole"] as? String {
+                self.isMarketer = userRole == "marketer"
+                logger.debug("User role checked: \(userRole)")
             }
         } catch {
-            print("AuthManager: Error checking marketer status: \(error)")
+            logger.error("Failed to check marketer status: \(error.localizedDescription)")
             self.isMarketer = false
         }
     }

@@ -15,6 +15,22 @@ struct Video: Identifiable, Codable {
     var views: Int
     var isAdvertisement: Bool?
     
+    // Computed property for display ID
+    var displayId: String {
+        if userID == "archive_user", let archiveId = archiveIdentifier {
+            return archiveId
+        }
+        return id ?? UUID().uuidString
+    }
+    
+    // Computed property for stats document ID
+    var statsDocumentId: String {
+        if userID == "archive_user", let archiveId = archiveIdentifier {
+            return archiveId
+        }
+        return id ?? UUID().uuidString
+    }
+    
     enum CodingKeys: String, CodingKey {
         case id
         case archiveIdentifier

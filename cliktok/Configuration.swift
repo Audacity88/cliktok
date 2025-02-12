@@ -31,8 +31,8 @@ enum Configuration {
     
     static var defaultServerPort: Int { 8080 }
     static var defaultServerURLs: [URL] = [
-        URL(string: "http://10.10.2.1:\(defaultServerPort)")!,  // Mac's en0 interface IP
-        URL(string: "https://1ff1-24-153-157-38.ngrok-free.app")!  // ngrok tunnel
+        URL(string: "https://1ff1-24-153-157-38.ngrok-free.app")!,  // ngrok tunnel first
+        URL(string: "http://10.10.2.1:\(defaultServerPort)")!  // Mac's en0 interface IP as fallback
     ]
     
     static func getServerURL() async throws -> URL {
@@ -52,7 +52,8 @@ enum Configuration {
                 
                 // Add a longer timeout for initial connection
                 let config = URLSessionConfiguration.default
-                config.timeoutIntervalForRequest = 10 // 10 seconds timeout
+                config.timeoutIntervalForRequest = 5
+                config.timeoutIntervalForResource = 5
                 let session = URLSession(configuration: config)
                 
                 if await isServerReachable(url, using: session) {

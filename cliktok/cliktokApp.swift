@@ -35,8 +35,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
         
         logger.debug("🔥 Configuring Firebase...")
-        FirebaseCore.FirebaseApp.configure()
-        logger.debug("✅ Firebase configuration completed")
+        FirebaseConfig.shared.configure()
+        
+        // Check initial auth state
+        let authState = FirebaseConfig.shared.checkAuthState()
+        logger.debug("👤 Initial auth state: \(String(describing: authState))")
         
         return true
     }

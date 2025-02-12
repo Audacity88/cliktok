@@ -124,14 +124,14 @@ struct ContentView: View {
                         }
                         .tag(1)
                         
-                        // Submissions Tab (renamed from Home)
+                        // Home Tab
                         NavigationStack {
                             UnifiedVideoView(mode: .feed)
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
                             Image(systemName: "house.fill")
-                            Text("Submissions")
+                            Text("Home")
                         }
                         .tag(2)
                         
@@ -141,12 +141,12 @@ struct ContentView: View {
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
-                            Image(systemName: "sparkles.magnifyingglass")
+                            Image(systemName: "magnifyingglass.circle.fill")
                             Text("Search")
                         }
                         .tag(3)
                         
-                        // Wallet Tab
+                        // Keep existing Wallet tab
                         NavigationStack {
                             WalletView()
                         }
@@ -156,7 +156,7 @@ struct ContentView: View {
                         }
                         .tag(4)
                         
-                        // Upload Tab
+                        // Keep existing Upload tab
                         NavigationStack {
                             VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
                                 switchToTab(0)
@@ -170,7 +170,7 @@ struct ContentView: View {
                         }
                         .tag(5)
                         
-                        // Profile Tab
+                        // Keep existing Profile tab
                         NavigationStack {
                             ProfileView()
                                 .environmentObject(feedViewModel)
