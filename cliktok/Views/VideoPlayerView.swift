@@ -10,6 +10,27 @@ import Network
 // Video Asset Loader to handle caching and streaming
 actor VideoAssetLoader {
     static let shared = VideoAssetLoader()
+    private let logger = Logger(component: "AssetLoader")
+    
+    // Add helper method to get video identifier
+    private func getVideoIdentifier(from url: URL) -> String {
+        if url.absoluteString.contains("archive.org/download/") {
+            let components = url.absoluteString.components(separatedBy: "/download/")
+            if components.count > 1 {
+                let idComponents = components[1].components(separatedBy: "/")
+                if let identifier = idComponents.first {
+                    return "archive:\(identifier)"
+                }
+            }
+        }
+        return url.lastPathComponent
+    }
+    
+    enum NetworkQuality {
+        case poor
+        case fair
+        case good
+    }
     
     enum PrefetchPriority {
         case high
@@ -58,9 +79,10 @@ actor VideoAssetLoader {
     private var currentQuality: VideoQuality = .low // Start with low quality for faster initial load
     private let networkMonitor = NWPathMonitor()
     private let monitorQueue = DispatchQueue(label: "com.cliktok.network")
+    private var currentAsset: AVURLAsset?
     
     private init() {
-        print("VideoAssetLoader: Initializing with 512MB cache")
+        logger.info("🔥 Initializing with 512MB cache")
         let cacheSizeInBytes = 512 * 1024 * 1024
         self.cache = URLCache(memoryCapacity: cacheSizeInBytes / 4,
                             diskCapacity: cacheSizeInBytes,
@@ -71,6 +93,23 @@ actor VideoAssetLoader {
         assetCache.totalCostLimit = 512 * 1024 * 1024 // 512MB
         
         setupNetworkMonitoring()
+    }
+    
+    private func checkNetworkQuality() -> NetworkQuality {
+        let path = networkMonitor.currentPath
+        
+        switch path.status {
+        case .satisfied:
+            if path.isExpensive {
+                return .fair
+            } else if path.isConstrained {
+                return .poor
+            } else {
+                return .good
+            }
+        default:
+            return .poor
+        }
     }
     
     private func setupNetworkMonitoring() {
@@ -100,73 +139,44 @@ actor VideoAssetLoader {
     
     private func updateQuality(_ quality: VideoQuality) {
         currentQuality = quality
-        print("VideoAssetLoader: Quality updated to \(quality)")
+        self.logger.info("🎮 Quality updated to \(quality)")
     }
     
-    private func loadInitialMetadata(for asset: AVURLAsset) async throws {
-        print("VideoAssetLoader: Starting minimal metadata load")
-        let metadataStartTime = Date()
+    private func loadInitialMetadata(for asset: AVAsset) async throws {
+        let startTime = Date()
+        let videoId = getVideoIdentifier(from: (asset as? AVURLAsset)?.url ?? URL(fileURLWithPath: "unknown"))
+        self.logger.debug("📊 [\(videoId)] Starting metadata load")
         
-        // Load tracks with parallel loading and optimized timeout strategy
-        print("VideoAssetLoader: Loading essential tracks...")
-        let tracksStartTime = Date()
+        // Load tracks in parallel
+        async let videoTrackTask = try await asset.loadTracks(withMediaType: .video)
+        async let audioTrackTask = try await asset.loadTracks(withMediaType: .audio)
         
-        // Try loading tracks with increasing timeouts and parallel loading
-        let tracks = try await withThrowingTaskGroup(of: [AVAssetTrack].self) { group in
-            // Add main track loading task
-            group.addTask {
-                try await self.withTimeout(seconds: 10.0) {
-                    try await asset.load(.tracks)
-                }
-            }
-            
-            // Add parallel prefetch task for track properties
-            group.addTask {
-                do {
-                    let tracks = try await asset.loadTracks(withMediaType: .video)
-                    if let videoTrack = tracks.first {
-                        // Load essential properties in parallel
-                        try await videoTrack.load(.formatDescriptions)
-                        try await videoTrack.load(.naturalSize)
-                        try await videoTrack.load(.preferredTransform)
-                    }
-                    return tracks
-                } catch {
-                    return []
-                }
-            }
-            
-            // Return first successful result
-            for try await result in group {
-                if !result.isEmpty {
-                    return result
-                }
-            }
-            throw NSError(domain: "VideoAssetLoader", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to load tracks"])
+        let (videoTracks, audioTracks) = try await (videoTrackTask, audioTrackTask)
+        
+        guard let videoTrack = videoTracks.first else {
+            logger.error("❌ [\(videoId)] No video track found in asset")
+            throw AssetError.noVideoTrack
         }
-        print("VideoAssetLoader: Tracks loaded in \(Date().timeIntervalSince(tracksStartTime))s")
         
-        // Find and load video track with optimized property loading
-        if let videoTrack = tracks.first(where: { $0.mediaType == .video }) {
-            print("VideoAssetLoader: Loading video track format...")
-            let formatStartTime = Date()
-            
-            // Load essential video track properties
-            try await videoTrack.load(.formatDescriptions)
-            try await videoTrack.load(.naturalSize)
-            
-            print("VideoAssetLoader: Video track format loaded in \(Date().timeIntervalSince(formatStartTime))s")
-            
-            // Start loading audio track in background with lower priority
-            if let audioTrack = tracks.first(where: { $0.mediaType == .audio }) {
-                Task(priority: .background) {
-                    print("VideoAssetLoader: Loading audio track in background...")
-                    try? await audioTrack.load(.formatDescriptions)
-                }
+        // Load essential video properties
+        logger.debug("🎥 [\(videoId)] Loading video track properties")
+        let videoPropertiesStartTime = Date()
+        
+        try await videoTrack.load(.formatDescriptions)
+        try await videoTrack.load(.naturalSize)
+        try await videoTrack.load(.preferredTransform)
+        
+        logger.performance("⚡️ [\(videoId)] Video properties loaded in \(Date().timeIntervalSince(videoPropertiesStartTime))s")
+        
+        // Load audio track properties in background
+        if let audioTrack = audioTracks.first {
+            Task.detached(priority: .background) {
+                self.logger.debug("🔊 [\(videoId)] Loading audio track properties in background")
+                try? await audioTrack.load(.formatDescriptions)
             }
         }
         
-        print("VideoAssetLoader: Total metadata loading time: \(Date().timeIntervalSince(metadataStartTime))s")
+        logger.success("✅ [\(videoId)] Initial metadata loaded in \(Date().timeIntervalSince(startTime))s")
     }
     
     // Helper function to implement timeouts
@@ -204,7 +214,7 @@ actor VideoAssetLoader {
                 lastError = error
                 if attempt < maxAttempts - 1 {
                     let delay = Double(attempt + 1) * 0.5 // 0.5s, 1s, 1.5s delay between retries
-                    print("VideoAssetLoader: Retry \(attempt + 1) failed, waiting \(delay)s before next attempt")
+                    logger.debug("🔄 Retry \(attempt + 1) failed, waiting \(delay)s before next attempt")
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
             }
@@ -215,25 +225,27 @@ actor VideoAssetLoader {
     
     func loadAsset(for url: URL) async throws -> AVAsset {
         let startTime = Date()
-        print("VideoAssetLoader: Starting to load asset for URL: \(url)")
+        let videoId = getVideoIdentifier(from: url)
+        logger.info("🎬 [\(videoId)] Starting to load asset from URL: \(url)")
         
         // Return cached asset if available
-        if let cachedAsset = assetCache.object(forKey: url as NSURL) {
-            print("VideoAssetLoader: Found cached asset, returning immediately")
+        if let cachedAsset = assetCache.object(forKey: url as NSURL) as? AVURLAsset {
+            logger.success("✅ [\(videoId)] Found cached asset for URL: \(url)")
+            currentAsset = cachedAsset
             return cachedAsset
         }
         
         // Check if there's already a loading task
         if let existingTask = loadingAssets[url] {
-            print("VideoAssetLoader: Using existing loading task for URL")
+            logger.debug("⏳ [\(videoId)] Using existing loading task for URL: \(url)")
             return try await existingTask.value
         }
         
-        print("VideoAssetLoader: Creating new loading task")
+        logger.info("🆕 [\(videoId)] Creating new loading task for URL: \(url)")
         let task = Task<AVAsset, Error> {
             // Start with low quality for faster initial load
             let initialQuality = VideoQuality.low
-            print("VideoAssetLoader: Creating initial streaming asset with quality: \(initialQuality)")
+            logger.debug("🎮 [\(videoId)] Creating initial streaming asset with quality: \(initialQuality)")
             
             let assetCreationStartTime = Date()
             let initialOptions: [String: Any] = [
@@ -254,24 +266,25 @@ actor VideoAssetLoader {
             ]
             
             let asset = AVURLAsset(url: url, options: initialOptions)
-            print("VideoAssetLoader: Asset created in \(Date().timeIntervalSince(assetCreationStartTime))s")
+            currentAsset = asset
+            logger.performance("⚡️ [\(videoId)] Asset created in \(Date().timeIntervalSince(assetCreationStartTime))s")
             
             // Load only essential metadata asynchronously
-            print("VideoAssetLoader: Loading minimal metadata")
+            logger.info("📊 [\(videoId)] Loading minimal metadata for URL: \(url)")
             let metadataStartTime = Date()
             try await loadInitialMetadata(for: asset)
-            print("VideoAssetLoader: Metadata loaded in \(Date().timeIntervalSince(metadataStartTime))s")
+            logger.performance("⚡️ [\(videoId)] Metadata loaded in \(Date().timeIntervalSince(metadataStartTime))s")
             
             // Cache the initial quality asset
             let cacheStartTime = Date()
             assetCache.setObject(asset, forKey: url as NSURL)
-            print("VideoAssetLoader: Asset cached in \(Date().timeIntervalSince(cacheStartTime))s")
+            logger.performance("⚡️ [\(videoId)] Asset cached in \(Date().timeIntervalSince(cacheStartTime))s")
             
-            print("VideoAssetLoader: Initial asset prepared in \(Date().timeIntervalSince(startTime))s")
-            print("VideoAssetLoader: Performance breakdown:")
-            print("- Asset creation: \(Date().timeIntervalSince(assetCreationStartTime))s")
-            print("- Metadata loading: \(Date().timeIntervalSince(metadataStartTime))s")
-            print("- Asset caching: \(Date().timeIntervalSince(cacheStartTime))s")
+            logger.success("✅ [\(videoId)] Initial asset prepared in \(Date().timeIntervalSince(startTime))s")
+            logger.performance("📊 [\(videoId)] Performance breakdown for URL: \(url)")
+            logger.performance("- Asset creation: \(Date().timeIntervalSince(assetCreationStartTime))s")
+            logger.performance("- Metadata loading: \(Date().timeIntervalSince(metadataStartTime))s")
+            logger.performance("- Asset caching: \(Date().timeIntervalSince(cacheStartTime))s")
             
             // Start loading higher quality in the background after playback starts
             Task { [weak self] in
@@ -290,12 +303,13 @@ actor VideoAssetLoader {
             return asset
         } catch {
             loadingAssets[url] = nil
-            print("VideoAssetLoader: Error loading asset for URL \(url): \(error.localizedDescription)")
+            logger.error("❌ [\(videoId)] Error loading asset from URL \(url): \(error.localizedDescription)")
             throw error
         }
     }
     
     private func prefetchData(for url: URL, priority: PrefetchPriority) {
+        let videoId = getVideoIdentifier(from: url)
         // Cancel any existing prefetch task
         prefetchTasks[url]?.cancel()
         
@@ -310,9 +324,9 @@ actor VideoAssetLoader {
                 let prefetchSize = min(priority.prefetchSize, data.count)
                 await self.updatePreloadedData(url: url, data: data.prefix(prefetchSize))
                 
-                print("VideoAssetLoader: Prefetched \(prefetchSize) bytes for \(url)")
+                logger.debug("📥 [\(videoId)] Prefetched \(prefetchSize) bytes")
             } catch {
-                print("VideoAssetLoader: Prefetch failed for \(url): \(error)")
+                logger.error("❌ [\(videoId)] Prefetch failed: \(error.localizedDescription)")
             }
         }
         
@@ -324,31 +338,87 @@ actor VideoAssetLoader {
     }
     
     private func upgradeQualityIfPossible() async {
-        let path = networkMonitor.currentPath
+        logger.debug("Checking network conditions for quality upgrade")
         
-        let newQuality: VideoQuality
-        if path.status == .satisfied {
-            if path.isExpensive {
-                newQuality = .medium
-            } else if path.isConstrained {
-                newQuality = .low
-            } else {
-                newQuality = .high
-            }
-        } else {
-            return // Keep current quality
+        // Check network conditions (example implementation)
+        let networkQuality = await checkNetworkQuality()
+        let targetQuality = networkQuality == .good ? VideoQuality.high : VideoQuality.medium
+        
+        logger.info("Network quality: \(networkQuality), target quality: \(targetQuality)")
+        
+        do {
+            let startTime = Date()
+            try await upgradeAssetQuality(to: targetQuality)
+            logger.success("Successfully upgraded quality to \(targetQuality) in \(Date().timeIntervalSince(startTime))s")
+        } catch {
+            logger.warning("Failed to upgrade quality: \(error.localizedDescription)")
+        }
+    }
+    
+    private func upgradeAssetQuality(to quality: VideoQuality) async throws {
+        logger.info("Starting quality upgrade to \(quality)")
+        
+        guard let currentAsset = currentAsset else {
+            logger.warning("No current asset to upgrade")
+            return
         }
         
-        await updateQuality(newQuality)
+        let options: [String: Any] = [
+            "preferredPeakBitRate": quality.maxBitrate,
+            AVURLAssetReferenceRestrictionsKey: quality.preferredMaximumResolution.rawValue,
+            "AVURLAssetHTTPHeaderFieldsKey": [
+                "Range": "bytes=0-",  // Request full file for quality upgrade
+                "icy-metadata": "0",
+                "Accept": "video/*",
+                "Cache-Control": "no-transform",
+                "X-Playback-Session-Id": UUID().uuidString
+            ]
+        ]
+        
+        do {
+            let startTime = Date()
+            let upgradedAsset = AVURLAsset(url: currentAsset.url, options: options)
+            try await loadInitialMetadata(for: upgradedAsset)
+            
+            // Update cache with higher quality version
+            assetCache.setObject(upgradedAsset, forKey: currentAsset.url as NSURL)
+            logger.success("Quality upgrade completed in \(Date().timeIntervalSince(startTime))s")
+            
+        } catch {
+            logger.error("Error during quality upgrade: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    enum AssetError: Error {
+        case timeout
+        case noVideoTrack
+        case invalidFormat
+        case loadingFailed
+        
+        var localizedDescription: String {
+            switch self {
+            case .timeout:
+                return "Asset loading timed out"
+            case .noVideoTrack:
+                return "No video track found in asset"
+            case .invalidFormat:
+                return "Invalid video format"
+            case .loadingFailed:
+                return "Failed to load asset"
+            }
+        }
     }
     
     func prefetchWithPriority(for url: URL, priority: PrefetchPriority) async {
-        print("VideoAssetLoader: Starting priority prefetch for URL: \(url)")
+        let videoId = getVideoIdentifier(from: url)
+        logger.debug("🎬 [\(videoId)] Starting priority prefetch for URL: \(url)")
         
         // Skip if already cached or loading
         guard loadingAssets[url] == nil,
               prefetchTasks[url] == nil,
               assetCache.object(forKey: url as NSURL) == nil else {
+            logger.debug("⏭️ [\(videoId)] Asset already cached or loading for URL: \(url)")
             return
         }
         
@@ -362,13 +432,13 @@ actor VideoAssetLoader {
                 request.setValue("bytes=0-\(rangeSize)", forHTTPHeaderField: "Range")
                 request.cachePolicy = .returnCacheDataElseLoad
                 
-                print("VideoAssetLoader: Downloading initial \(rangeSize/1024)KB")
+                logger.debug("📥 [\(videoId)] Downloading initial \(rangeSize/1024)KB from URL: \(url)")
                 let (data, response) = try await session.data(for: request)
                 
                 if let httpResponse = response as? HTTPURLResponse,
                    httpResponse.statusCode == 206 {
                     await updatePreloadedData(url: url, data: data[...])
-                    print("VideoAssetLoader: Successfully prefetched \(data.count) bytes")
+                    logger.success("✅ [\(videoId)] Successfully prefetched \(data.count) bytes from URL: \(url)")
                     
                     // Start loading the rest of the video in the background if high priority
                     if priority == .high {
@@ -377,14 +447,14 @@ actor VideoAssetLoader {
                         }
                     }
                 } else {
-                    print("VideoAssetLoader: Server doesn't support range requests, falling back")
+                    logger.warning("⚠️ [\(videoId)] Server doesn't support range requests for URL: \(url), falling back")
                     // Create and cache the full asset but don't prepare it for playback
                     let asset = AVURLAsset(url: url)
                     try await loadInitialMetadata(for: asset)
                     assetCache.setObject(asset, forKey: url as NSURL)
                 }
             } catch {
-                print("VideoAssetLoader: Prefetch failed for \(url): \(error.localizedDescription)")
+                logger.error("❌ [\(videoId)] Prefetch failed for URL \(url): \(error.localizedDescription)")
             }
         }
         
@@ -392,7 +462,8 @@ actor VideoAssetLoader {
     }
     
     func cleanupAsset(for url: URL) {
-        print("VideoAssetLoader: Cleaning up asset for URL: \(url)")
+        let videoId = getVideoIdentifier(from: url)
+        logger.debug("🧹 [\(videoId)] Cleaning up asset for URL: \(url)")
         assetCache.removeObject(forKey: url as NSURL)
         preloadedData.removeValue(forKey: url)
         loadingAssets[url]?.cancel()
@@ -400,16 +471,19 @@ actor VideoAssetLoader {
         prefetchTasks[url]?.cancel()
         prefetchTasks[url] = nil
         cache.removeCachedResponse(for: URLRequest(url: url))
+        logger.success("✅ [\(videoId)] Cleanup complete for URL: \(url)")
     }
     
     func clearCache() {
-        print("VideoAssetLoader: Clearing all caches")
+        logger.debug("🗑️ Clearing all caches")
         assetCache.removeAllObjects()
         preloadedData.removeAll()
         cache.removeAllCachedResponses()
+        logger.success("✅ Cache cleared")
     }
     
     deinit {
+        logger.debug("🔥 VideoAssetLoader deinitializing")
         networkMonitor.cancel()
         for task in prefetchTasks.values {
             task.cancel()
@@ -425,7 +499,6 @@ struct VideoControlsOverlay: View {
     
     var body: some View {
         Button(action: {
-            print("Play/Pause button tapped - isPlaying before tap: \(isPlaying)")
             togglePlayPause()
         }) {
             Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
@@ -433,7 +506,7 @@ struct VideoControlsOverlay: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 70, height: 70)  // Slightly larger touch target
                 .foregroundColor(.white)
-                        .contentShape(Rectangle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
         .opacity(showControls ? 0.9 : 0)
@@ -749,6 +822,8 @@ struct VideoPlayerView: View {
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
     @StateObject private var playerViewModel = VideoPlayerViewModel()
     @Environment(\.dismiss) private var dismiss
+    private let logger = Logger(component: "VideoPlayerView")
+    
     let video: Video
     let showBackButton: Bool
     let showCreator: Bool
@@ -794,13 +869,152 @@ struct VideoPlayerView: View {
         self._currentViewCount = State(initialValue: video.views)
         
         // Configure audio session once at init
-        Task {
+        Task { [self] in
             do {
                 try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
                 try AVAudioSession.sharedInstance().setActive(true)
+                logger.debug("🎧 Audio session configured successfully for video: \(video.stableId)")
             } catch {
-                print("Failed to set audio session category: \(error)")
+                logger.error("❌ Failed to set audio session category for video \(video.stableId): \(error)")
             }
+        }
+    }
+    
+    private func setupVideo() {
+        logger.info("🎥 Setting up video: \(video.stableId) with URL: \(video.videoURL)")
+        playerViewModel.setVideo(url: video.videoURL, isVisible: isVisible, hideControls: {
+            withAnimation {
+                showControls = false
+                logger.debug("🎮 Controls hidden for video \(video.stableId) - auto-play complete")
+            }
+        })
+        Task {
+            // Load and play video
+            logger.debug("🎬 Loading and playing video: \(video.stableId)")
+            await playerViewModel.loadAndPlayVideo()
+            
+            // Load creator if needed
+            if creator == nil {
+                logger.debug("👤 Fetching creator information for video \(video.stableId)")
+                await feedViewModel.fetchCreators(for: [video])
+                creator = feedViewModel.getCreator(for: video)
+                if let creator = creator {
+                    logger.debug("👤 Creator loaded for video \(video.stableId): \(creator.displayName)")
+                }
+            }
+            
+            // Load balance and tip history
+            logger.debug("💰 Loading balance and tip history for video \(video.stableId)")
+            await tipViewModel.loadBalance()
+            await tipViewModel.loadTipHistory()
+            
+            // Update tip count
+            if let videoId = video.id {
+                totalTips = tipViewModel.sentTips.filter { $0.videoID == videoId }.count
+                logger.debug("💝 Total tips for video \(video.stableId): \(totalTips)")
+            } else {
+                logger.warning("⚠️ No Firestore ID available for video: \(video.stableId)")
+            }
+        }
+    }
+    
+    private func handleVisibilityChange(_ newValue: Bool) {
+        logger.debug("👁️ Visibility changed to \(newValue) for video \(video.stableId)")
+        if newValue {
+            // Start tracking viewing time when video becomes visible
+            viewingStartTime = Date()
+            
+            // Immediately update player visibility for autoplay
+            playerViewModel.updateVisibility(true)
+            
+            // Ensure we don't clean up too early
+            Task {
+                try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second delay
+                if isVisible {  // Reconfirm visibility after delay
+                    playerViewModel.ensurePlayback()
+                }
+            }
+            
+            // Update stats after 3 seconds of viewing
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)  // 3 second delay
+                if isVisible && !hasUpdatedStats {
+                    do {
+                        logger.debug("📊 Updating video stats after 3 seconds of viewing for \(video.stableId)")
+                        try await feedViewModel.updateVideoStats(video: video)
+                        hasUpdatedStats = true
+                        
+                        // Update view count from updated video
+                        if let updatedVideo = feedViewModel.videos.first(where: { $0.stableId == video.stableId }) {
+                            withAnimation {
+                                currentViewCount = updatedVideo.views
+                                logger.debug("👀 Updated view count for \(video.stableId): \(currentViewCount)")
+                            }
+                        } else if let updatedVideo = feedViewModel.searchResults.first(where: { $0.stableId == video.stableId }) {
+                            withAnimation {
+                                currentViewCount = updatedVideo.views
+                                logger.debug("👀 Updated view count from search results for \(video.stableId): \(currentViewCount)")
+                            }
+                        }
+                    } catch {
+                        logger.error("❌ Error updating video stats for \(video.stableId): \(error)")
+                    }
+                }
+            }
+        } else {
+            viewingStartTime = nil
+            
+            // Add longer delay before cleanup
+            Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1.0 second delay
+                if !isVisible {  // Check if still invisible after delay
+                    playerViewModel.updateVisibility(false)
+                    logger.debug("👁️ Player visibility updated to false after delay for \(video.stableId)")
+                }
+            }
+        }
+    }
+    
+    private func handleEditSheetChange(_ newValue: Bool) {
+        if newValue {
+            logger.debug("✏️ Edit sheet opened for video \(video.stableId), pausing playback")
+            playerViewModel.player?.pause()
+            playerViewModel.isPlaying = false
+        } else {
+            logger.debug("✏️ Edit sheet closed for video \(video.stableId), resuming playback")
+            playerViewModel.player?.play()
+            playerViewModel.isPlaying = true
+            Task {
+                await feedViewModel.loadInitialVideos()
+            }
+        }
+    }
+    
+    private func resetControlsTimer() {
+        guard !isResettingControls else { return }
+        isResettingControls = true
+        
+        controlsTimer?.invalidate()
+        
+        withAnimation {
+            showControls = true
+            logger.debug("🎮 Controls shown - resetControlsTimer()")
+        }
+        
+        lastControlReset = Date()
+        
+        if playerViewModel.isPlaying && !isDraggingProgress {
+            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+                if playerViewModel.isPlaying && !isDraggingProgress {
+                    withAnimation {
+                        showControls = false
+                        logger.debug("🎮 Controls hidden - timer expired")
+                    }
+                }
+                isResettingControls = false
+            }
+        } else {
+            isResettingControls = false
         }
     }
     
@@ -840,6 +1054,7 @@ struct VideoPlayerView: View {
                     showEditSheet: $showEditSheet,
                     showDeleteAlert: $showDeleteAlert,
                     onDismiss: {
+                        logger.debug("Dismissing video player")
                         playerViewModel.cleanupPlayer()
                         clearSearchOnDismiss = true
                         dismiss()
@@ -854,9 +1069,12 @@ struct VideoPlayerView: View {
             .edgesIgnoringSafeArea(.all)
             .statusBar(hidden: true)  // Hide the system status bar
         }
-        .onAppear(perform: setupVideo)
+        .onAppear {
+            logger.debug("VideoPlayerView appeared")
+            setupVideo()
+        }
         .onDisappear {
-            print("VideoPlayerView: View disappearing, cleaning up")
+            logger.debug("VideoPlayerView disappearing, cleaning up")
             playerViewModel.cleanupPlayer()
         }
         .onChange(of: isVisible, perform: handleVisibilityChange)
@@ -864,6 +1082,7 @@ struct VideoPlayerView: View {
         .onReceive(tipViewModel.$sentTips) { newTips in
             if let videoId = video.id {
                 totalTips = newTips.filter { $0.videoID == videoId }.count
+                logger.debug("Updated total tips: \(totalTips)")
             }
         }
         .sheet(isPresented: $showEditSheet) {
@@ -885,10 +1104,13 @@ struct VideoPlayerView: View {
             Button("Delete", role: .destructive) {
                 Task {
                     do {
+                        logger.debug("Deleting video: \(video.stableId)")
                         try await feedViewModel.deleteVideo(video)
                         playerViewModel.cleanupPlayer()
                         dismiss()
+                        logger.debug("Video deleted successfully")
                     } catch {
+                        logger.error("Failed to delete video: \(error)")
                         playerViewModel.errorMessage = error.localizedDescription
                         playerViewModel.showError = true
                     }
@@ -900,145 +1122,6 @@ struct VideoPlayerView: View {
         }
         .sheet(isPresented: $showWallet) {
             WalletView()
-        }
-    }
-    
-    private func setupVideo() {
-        print("VideoPlayerView appeared for video: \(video.stableId)")
-        playerViewModel.setVideo(url: video.videoURL, isVisible: isVisible, hideControls: {
-            withAnimation {
-                showControls = false
-                print("Controls HIDDEN - auto-play complete")
-            }
-        })
-        Task {
-            // Load and play video
-            await playerViewModel.loadAndPlayVideo()
-            
-            // Load creator if needed
-            if creator == nil {
-                await feedViewModel.fetchCreators(for: [video])
-                creator = feedViewModel.getCreator(for: video)
-            }
-            
-            // Load balance and tip history
-            await tipViewModel.loadBalance()
-            await tipViewModel.loadTipHistory()
-            
-            // Load and update stats in one step
-            do {
-                print("VideoPlayerView: Loading and updating stats for video: \(video.stableId)")
-                try await feedViewModel.updateVideoStats(video: video)
-                hasUpdatedStats = true
-                
-                // Update view count from updated video
-                if let updatedVideo = feedViewModel.videos.first(where: { $0.stableId == video.stableId }) {
-                    print("VideoPlayerView: Updating local view count to: \(updatedVideo.views)")
-                    withAnimation {
-                        currentViewCount = updatedVideo.views
-                    }
-                } else if let updatedVideo = feedViewModel.searchResults.first(where: { $0.stableId == video.stableId }) {
-                    print("VideoPlayerView: Updating local view count from search results to: \(updatedVideo.views)")
-                    withAnimation {
-                        currentViewCount = updatedVideo.views
-                    }
-                }
-                
-                // If we can't find the video in either array, get the stats directly
-                if currentViewCount == 0 {
-                    let db = Firestore.firestore()
-                    let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
-                    let statsRef = db.collection(collectionName).document(video.statsDocumentId)
-                    let docSnapshot = try await statsRef.getDocument()
-                    
-                    if let data = docSnapshot.data(), let views = data["views"] as? Int {
-                        print("VideoPlayerView: Updating local view count from direct stats query to: \(views)")
-                        withAnimation {
-                            currentViewCount = views
-                        }
-                    }
-                }
-            } catch {
-                print("VideoPlayerView: Error updating video stats: \(error.localizedDescription)")
-                print("VideoPlayerView: Full error: \(error)")
-            }
-            
-            // Update tip count
-            if let videoId = video.id {
-                totalTips = tipViewModel.sentTips.filter { $0.videoID == videoId }.count
-            } else {
-                print("No Firestore ID available for video: \(video.stableId)")
-            }
-        }
-    }
-    
-    private func handleVisibilityChange(_ newValue: Bool) {
-        print("VideoPlayerView: Visibility changed to \(newValue) for video: \(video.stableId)")
-        if newValue {
-            // Start tracking viewing time when video becomes visible
-            viewingStartTime = Date()
-            
-            // Immediately update player visibility for autoplay
-            playerViewModel.updateVisibility(true)
-            
-            // Ensure we don't clean up too early
-            Task {
-                try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second delay
-                if isVisible {  // Reconfirm visibility after delay
-                    playerViewModel.ensurePlayback()
-                }
-            }
-        } else {
-            viewingStartTime = nil
-            
-            // Add longer delay before cleanup
-            Task {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1.0 second delay
-                if !isVisible {  // Check if still invisible after delay
-                    playerViewModel.updateVisibility(false)
-                }
-            }
-        }
-    }
-    
-    private func handleEditSheetChange(_ newValue: Bool) {
-        if newValue {
-            playerViewModel.player?.pause()
-            playerViewModel.isPlaying = false
-        } else {
-            playerViewModel.player?.play()
-            playerViewModel.isPlaying = true
-            Task {
-                await feedViewModel.loadInitialVideos()
-            }
-        }
-    }
-    
-    private func resetControlsTimer() {
-        guard !isResettingControls else { return }
-        isResettingControls = true
-        
-        controlsTimer?.invalidate()
-        
-        withAnimation {
-            showControls = true
-            print("Controls SHOWN - resetControlsTimer()")
-        }
-        
-        lastControlReset = Date()
-        
-        if playerViewModel.isPlaying && !isDraggingProgress {
-            controlsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                if playerViewModel.isPlaying && !isDraggingProgress {
-                    withAnimation {
-                        showControls = false
-                        print("Controls HIDDEN - timer expired")
-                    }
-                }
-                isResettingControls = false
-            }
-        } else {
-            isResettingControls = false
         }
     }
 }
@@ -1153,6 +1236,7 @@ private struct VideoControlsOverlayContainer: View {
     let resetControlsTimer: () -> Void
     let player: AVPlayer
     let geometry: GeometryProxy
+    private let logger = Logger(component: "VideoControlsContainer")
     
     var body: some View {
         ZStack {
@@ -1164,7 +1248,10 @@ private struct VideoControlsOverlayContainer: View {
                     withAnimation {
                         showControls.toggle()
                         if showControls {
+                            logger.debug("🎮 Controls toggled, showing controls")
                             resetControlsTimer()
+                        } else {
+                            logger.debug("🎮 Controls toggled, hiding controls")
                         }
                     }
                 }
@@ -1213,6 +1300,7 @@ struct ProgressBar: View {
     @Binding var isDragging: Bool
     let onChanged: (Double) -> Void
     let onEnded: (Double) -> Void
+    private let logger = Logger(component: "ProgressBar")
     
     var body: some View {
         GeometryReader { geometry in
@@ -1233,18 +1321,20 @@ struct ProgressBar: View {
                     .frame(width: 12, height: 12)
                     .position(x: geometry.size.width * CGFloat(value / total), y: geometry.size.height / 2)
             }
-            .contentShape(Rectangle())  // Make entire area tappable
+            .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { gesture in
                         let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
                         let newValue = total * Double(ratio)
                         isDragging = true
+                        logger.debug("🎮 Progress drag changed: \(String(format: "%.2f", newValue))s")
                         onChanged(newValue)
                     }
                     .onEnded { gesture in
                         let ratio = max(0, min(gesture.location.x / geometry.size.width, 1))
                         let newValue = total * Double(ratio)
+                        logger.debug("🎮 Progress drag ended: \(String(format: "%.2f", newValue))s")
                         onEnded(newValue)
                         isDragging = false
                     }

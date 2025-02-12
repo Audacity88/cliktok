@@ -14,6 +14,7 @@ import os
 struct RetroStatusBar: View {
     @State private var currentTime = Date()
     @State private var batteryLevel: Float = 0.0
+    private let logger = Logger(component: "RetroStatusBar")
     
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
@@ -32,15 +33,22 @@ struct RetroStatusBar: View {
         .padding()
         .background(Color.black)
         .onAppear {
+            logger.debug("⚡️ Enabling battery monitoring")
             UIDevice.current.isBatteryMonitoringEnabled = true
             batteryLevel = UIDevice.current.batteryLevel >= 0 ? UIDevice.current.batteryLevel : 1.0
+            logger.debug("🔋 Initial battery level: \(Int(batteryLevel * 100))%")
         }
         .onDisappear {
+            logger.debug("⚡️ Disabling battery monitoring")
             UIDevice.current.isBatteryMonitoringEnabled = false
         }
         .onReceive(timer) { input in
             currentTime = input
-            batteryLevel = UIDevice.current.batteryLevel >= 0 ? UIDevice.current.batteryLevel : batteryLevel
+            let newBatteryLevel = UIDevice.current.batteryLevel >= 0 ? UIDevice.current.batteryLevel : batteryLevel
+            if newBatteryLevel != batteryLevel {
+                logger.debug("🔋 Battery level updated: \(Int(newBatteryLevel * 100))%")
+                batteryLevel = newBatteryLevel
+            }
         }
     }
 }
@@ -52,12 +60,13 @@ struct ContentView: View {
     @State private var scrollToTop = false
     @State private var isLoading = true
     
-    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "ContentView")
+    private let logger = Logger(component: "ContentView")
     
-    // Use the shared instance as a StateObject to observe changes
     @StateObject private var authManager = AuthenticationManager.shared
     
     init() {
+        logger.debug("🎨 Configuring UI appearance")
+        
         // Set the unselected color to gray and configure dark appearance
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
@@ -88,10 +97,11 @@ struct ContentView: View {
         UITabBar.appearance().itemPositioning = .centered
         UITabBar.appearance().itemSpacing = 32
         
-        logger.debug("🎨 ContentView initialized with UI appearance configuration")
+        logger.debug("✅ UI appearance configuration complete")
     }
     
     func switchToTab(_ tab: Int) {
+        logger.debug("🔄 Switching to tab: \(tab)")
         selectedTab = tab
     }
     
@@ -146,7 +156,7 @@ struct ContentView: View {
                         }
                         .tag(3)
                         
-                        // Keep existing Wallet tab
+                        // Wallet tab
                         NavigationStack {
                             WalletView()
                         }
@@ -156,7 +166,7 @@ struct ContentView: View {
                         }
                         .tag(4)
                         
-                        // Keep existing Upload tab
+                        // Upload tab
                         NavigationStack {
                             VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
                                 switchToTab(0)
@@ -170,7 +180,7 @@ struct ContentView: View {
                         }
                         .tag(5)
                         
-                        // Keep existing Profile tab
+                        // Profile tab
                         NavigationStack {
                             ProfileView()
                                 .environmentObject(feedViewModel)

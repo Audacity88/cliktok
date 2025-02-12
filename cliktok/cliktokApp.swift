@@ -13,11 +13,11 @@ import FirebaseAuth
 import FirebaseFirestore
 
 class AppDelegate: NSObject, UIApplicationDelegate {
-    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "AppDelegate")
+    private let logger = Logger(component: "AppDelegate")
     
     func application(_ application: UIApplication,
                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
-        logger.debug("🚀 App launch started")
+        logger.info("🚀 App launch started")
         logger.debug("📱 Device: \(UIDevice.current.name), iOS \(UIDevice.current.systemVersion)")
         logger.debug("🏗️ Starting app initialization...")
         
@@ -31,16 +31,19 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         }
         if kerr == KERN_SUCCESS {
             let usedMB = Double(info.resident_size) / 1024.0 / 1024.0
-            logger.debug("💾 Initial memory usage: \(String(format: "%.2f", usedMB))MB")
+            logger.performance("💾 Initial memory usage: \(String(format: "%.2f", usedMB))MB")
+        } else {
+            logger.warning("⚠️ Could not get memory usage information")
         }
         
-        logger.debug("🔥 Configuring Firebase...")
+        logger.info("🔥 Configuring Firebase...")
         FirebaseConfig.shared.configure()
         
         // Check initial auth state
         let authState = FirebaseConfig.shared.checkAuthState()
-        logger.debug("👤 Initial auth state: \(String(describing: authState))")
+        logger.info("👤 Initial auth state: \(String(describing: authState))")
         
+        logger.success("✅ App initialization complete")
         return true
     }
 }
@@ -49,16 +52,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 struct cliktokApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var authManager = AuthenticationManager.shared
+    private let logger = Logger(component: "cliktokApp")
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(authManager)
                 .onOpenURL { url in
+                    logger.debug("🔗 Handling URL callback: \(url)")
                     // Handle Stripe return URL
                     let stripeHandled = StripeAPI.handleURLCallback(with: url)
-                    if !stripeHandled {
-                        // Handle other URL schemes if needed
+                    if stripeHandled {
+                        logger.debug("✅ URL handled by Stripe")
+                    } else {
+                        logger.debug("⏭️ URL not handled by Stripe, skipping")
                     }
                 }
         }

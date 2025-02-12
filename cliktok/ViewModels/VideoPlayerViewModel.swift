@@ -1,10 +1,12 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import os
 
 class VideoPlayerViewModel: NSObject, ObservableObject {
     // Add static property to track currently playing instance
     private static var currentlyPlayingViewModel: VideoPlayerViewModel?
+    private let logger = Logger(component: "VideoPlayerViewModel")
     
     @Published var player: AVPlayer?
     @Published var isPlaying = false
@@ -32,8 +34,31 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     private var pendingVisibilityUpdate: Bool?
     private var isLoadingTask: Task<Void, Never>?
     
+    private var videoIdentifier: String {
+        if let url = videoURL {
+            if url.contains("archive.org") {
+                // Extract archive.org identifier
+                let components = url.components(separatedBy: "/download/")
+                if components.count > 1 {
+                    let idComponents = components[1].components(separatedBy: "/")
+                    if let identifier = idComponents.first {
+                        return "archive:\(identifier)"
+                    }
+                }
+            }
+            // For regular videos, use last path component or shortened URL
+            if let lastComponent = URL(string: url)?.lastPathComponent {
+                return lastComponent
+            }
+            // Fallback to shortened URL
+            let maxLength = 30
+            return url.count > maxLength ? String(url.prefix(maxLength)) + "..." : url
+        }
+        return "unknown"
+    }
+    
     func setVideo(url: String, isVisible: Bool, hideControls: @escaping () -> Void) {
-        print("VideoPlayerView: Setting video URL: \(url), isVisible: \(isVisible)")
+        logger.debug("🎥 [\(videoIdentifier)] Setting video URL: \(url), isVisible: \(isVisible)")
         
         // Cancel any existing loading task
         isLoadingTask?.cancel()
@@ -63,11 +88,11 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     }
     
     func loadAndPlayVideo() async {
-        print("VideoPlayerView: Starting loadAndPlayVideo")
+        logger.info("🎬 [\(videoIdentifier)] Starting loadAndPlayVideo")
         
         // Prevent multiple concurrent loads
         if isLoadingTask != nil {
-            print("VideoPlayerView: Load already in progress, skipping")
+            logger.debug("⏭️ [\(videoIdentifier)] Load already in progress, skipping")
             return
         }
         
@@ -77,13 +102,13 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             if let currentPlayer = VideoPlayerViewModel.currentlyPlayingViewModel,
                currentPlayer !== self {
                 await MainActor.run {
-                    print("VideoPlayerView: Stopping previous video")
+                    logger.debug("⏹️ [\(videoIdentifier)] Stopping previous video")
                     currentPlayer.cleanupPlayer()
                 }
             }
             
             guard let urlString = videoURL else {
-                print("VideoPlayerView: No video URL provided")
+                logger.warning("⚠️ [\(videoIdentifier)] No video URL provided")
                 return
             }
             
@@ -98,10 +123,10 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                         do {
                             // Try to get the actual video URL
                             let actualURL = try await InternetArchiveAPI.getActualVideoURL(identifier: identifier)
-                            print("VideoPlayerView: Using actual video URL: \(actualURL)")
+                            logger.debug("🔄 [\(videoIdentifier)] Using actual video URL: \(actualURL)")
                             finalURLString = actualURL
                         } catch {
-                            print("VideoPlayerView: Failed to get actual video URL for \(identifier): \(error.localizedDescription)")
+                            logger.error("❌ [\(videoIdentifier)] Failed to get actual video URL for \(identifier): \(error.localizedDescription)")
                             // Continue with the original URL as fallback
                         }
                     }
@@ -109,11 +134,11 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             }
             
             guard let url = URL(string: finalURLString) else {
-                print("VideoPlayerView: Invalid URL for video: \(finalURLString)")
+                logger.error("❌ [\(videoIdentifier)] Invalid URL for video: \(finalURLString)")
                 return
             }
             
-            print("VideoPlayerView: Starting to load video from URL: \(url), isVisible: \(isVisible)")
+            logger.info("🎥 [\(videoIdentifier)] Starting to load video from URL: \(url), isVisible: \(isVisible)")
             let startTime = Date()
             
             await MainActor.run {
@@ -127,14 +152,14 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             }
             
             do {
-                print("VideoPlayerView: Requesting asset from loader")
+                logger.debug("🔄 [\(videoIdentifier)] Requesting asset from loader")
                 let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
                 
                 // Load duration asynchronously before creating player item
                 let durationValue = try await asset.load(.duration)
                 let durationSeconds = CMTimeGetSeconds(durationValue)
                 
-                print("VideoPlayerView: Creating player item")
+                logger.debug("🎬 [\(videoIdentifier)] Creating player item")
                 let playerItem = AVPlayerItem(asset: asset)
                 playerItem.preferredForwardBufferDuration = 2
                 playerItem.automaticallyPreservesTimeOffsetFromLive = false
@@ -143,7 +168,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                 playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
                 
                 await MainActor.run {
-                    print("VideoPlayerView: Setting up player on main thread")
+                    logger.debug("🔧 [\(videoIdentifier)] Setting up player on main thread")
                     
                     // Set duration first
                     if durationSeconds.isFinite {
@@ -162,22 +187,22 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     
                     // If this video should be visible, make it the currently playing video
                     if isVisible {
-                        print("VideoPlayerView: Video is visible, setting as current")
+                        logger.debug("👁️ [\(videoIdentifier)] Video is visible, setting as current")
                         VideoPlayerViewModel.currentlyPlayingViewModel = self
                         // Don't start playing here - wait for ready to play status
                         isPlaying = false
                         showPlayButton = true
                     } else {
-                        print("VideoPlayerView: Video is not visible, staying paused")
+                        logger.debug("👁️ [\(videoIdentifier)] Video is not visible, staying paused")
                         isPlaying = false
                         showPlayButton = true
                     }
                     
-                    print("VideoPlayerView: Video setup completed in \(Date().timeIntervalSince(startTime))s")
+                    logger.success("✅ [\(videoIdentifier)] Video setup completed in \(Date().timeIntervalSince(startTime))s")
                     isLoadingVideo = false
                 }
             } catch {
-                print("VideoPlayerView: Error loading video for URL \(url): \(error.localizedDescription)")
+                logger.error("❌ [\(videoIdentifier)] Error loading video: \(error.localizedDescription)")
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
                     self.showError = true
@@ -190,7 +215,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         do {
             try await isLoadingTask?.value
         } catch {
-            print("VideoPlayerView: Loading task cancelled or failed")
+            logger.error("❌ Loading task cancelled or failed")
         }
         
         // Clear loading task at the end
@@ -210,7 +235,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             case .failed:
                 if let playerItem = object as? AVPlayerItem,
                    let error = playerItem.error as NSError? {
-                    print("VideoPlayerView: Playback failed for URL \(videoURL ?? "unknown"): \(error.localizedDescription)")
+                    logger.error("❌ [\(videoIdentifier)] Playback failed: \(error.localizedDescription)")
                     
                     // Handle invalid sample cursor error
                     if error.domain == AVFoundationErrorDomain && 
@@ -239,11 +264,11 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     }
                 }
             case .readyToPlay:
-                print("VideoPlayerView: Player item is ready to play, isVisible: \(isVisible)")
+                logger.debug("✅ [\(videoIdentifier)] Player item is ready to play, isVisible: \(isVisible)")
                 Task { @MainActor in
                     // Only handle ready-to-play if we're still in a valid state
                     guard isValidForPlayback else {
-                        print("VideoPlayerView: Ignoring ready-to-play event - player is no longer valid")
+                        logger.debug("⏭️ [\(videoIdentifier)] Ignoring ready-to-play event - player is no longer valid")
                         return
                     }
                     
@@ -251,7 +276,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     let shouldBeVisible = pendingVisibilityUpdate ?? isVisible
                     
                     if shouldBeVisible {
-                        print("VideoPlayerView: Video is ready and should be visible, starting playback")
+                        logger.debug("▶️ [\(videoIdentifier)] Video is ready and should be visible, starting playback")
                         isPlaybackStarting = true
                         VideoPlayerViewModel.currentlyPlayingViewModel = self
                         player?.play()
@@ -272,7 +297,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                             isPlaybackStarting = false
                         }
                     } else {
-                        print("VideoPlayerView: Video is ready but should not be visible, staying paused")
+                        logger.debug("⏸️ [\(videoIdentifier)] Video is ready but should not be visible, staying paused")
                         isPlaying = false
                         showPlayButton = true
                     }
@@ -281,9 +306,9 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     pendingVisibilityUpdate = nil
                 }
             case .unknown:
-                print("VideoPlayerView: Player item status is unknown")
+                logger.debug("❓ [\(videoIdentifier)] Player item status is unknown")
             @unknown default:
-                print("VideoPlayerView: Player item has unhandled status")
+                logger.warning("⚠️ [\(videoIdentifier)] Player item has unhandled status")
             }
         }
     }
@@ -297,7 +322,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         // If we're starting playback or just started, debounce the cleanup
         if isPlaybackStarting || (lastPlaybackStartTime != nil && 
            Date().timeIntervalSince(lastPlaybackStartTime!) < 2.0) {
-            print("VideoPlayerView: Debouncing cleanup - playback starting or recently started")
+            logger.debug("⏳ [\(videoIdentifier)] Debouncing cleanup - playback starting or recently started")
             
             cleanupDebounceTask = Task { @MainActor in
                 do {
@@ -306,7 +331,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                         performCleanup()
                     }
                 } catch {
-                    print("VideoPlayerView: Cleanup debounce task cancelled")
+                    logger.debug("🚫 [\(videoIdentifier)] Cleanup debounce task cancelled")
                 }
             }
             return
@@ -318,22 +343,22 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     private func performCleanup() {
         // Prevent cleanup during visibility transitions or if already cleaning up
         guard !isInVisibilityTransition && !isInCleanupState else {
-            print("VideoPlayerView: Skipping cleanup - in transition or cleanup state")
+            logger.debug("⏭️ [\(videoIdentifier)] Skipping cleanup - in transition or cleanup state")
             return
         }
         
         isInCleanupState = true
         isValidForPlayback = false
-        print("VideoPlayerView: Cleaning up player")
+        logger.info("🧹 [\(videoIdentifier)] Cleaning up player")
         
         // Remove this instance from currently playing if it is the current one
         if VideoPlayerViewModel.currentlyPlayingViewModel === self {
-            print("VideoPlayerView: Removing self from currently playing")
+            logger.debug("🔄 [\(videoIdentifier)] Removing self from currently playing")
             VideoPlayerViewModel.currentlyPlayingViewModel = nil
         }
         
         if let currentPlayer = player {
-            print("VideoPlayerView: Pausing and cleaning up current player")
+            logger.debug("⏹️ [\(videoIdentifier)] Pausing and cleaning up current player")
             currentPlayer.pause()
             
             // Remove KVO observer from player item
@@ -343,7 +368,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             
             // Only remove the time observer if it was added to this player instance
             if currentPlayer === observedPlayer, let token = timeObserverToken {
-                print("VideoPlayerView: Removing time observer")
+                logger.debug("⏱️ [\(videoIdentifier)] Removing time observer")
                 currentPlayer.removeTimeObserver(token)
                 timeObserverToken = nil
                 observedPlayer = nil
@@ -365,7 +390,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         if let urlString = videoURL,
            let url = URL(string: urlString) {
             Task {
-                print("VideoPlayerView: Cleaning up asset for URL: \(urlString)")
+                logger.debug("🗑️ [\(videoIdentifier)] Cleaning up asset for URL: \(urlString)")
                 await VideoAssetLoader.shared.cleanupAsset(for: url)
             }
         }
@@ -377,7 +402,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     private func setupTimeObserver(for player: AVPlayer) {
         // Remove existing observer if any
         if let existingPlayer = observedPlayer, let token = timeObserverToken {
-            print("VideoPlayerView: Removing existing time observer")
+            logger.debug("🔄 [\(videoIdentifier)] Removing existing time observer")
             existingPlayer.removeTimeObserver(token)
             timeObserverToken = nil
             observedPlayer = nil
@@ -397,7 +422,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             // Update playing state
             let isCurrentlyPlaying = player.rate != 0
             if self.isPlaying != isCurrentlyPlaying {
-                print("Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying)")
+                self.logger.debug("▶️ [\(videoIdentifier)] Play state changed - isCurrentlyPlaying: \(isCurrentlyPlaying), previous isPlaying: \(self.isPlaying)")
                 self.isPlaying = isCurrentlyPlaying
                 self.showPlayButton = !isCurrentlyPlaying
             }
@@ -406,20 +431,20 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         // Store the token and player reference
         timeObserverToken = token
         observedPlayer = player
-        print("VideoPlayerView: Added new time observer")
+        logger.debug("⏱️ [\(videoIdentifier)] Added new time observer")
     }
     
     @MainActor
     func updateVisibility(_ isVisible: Bool) {
         self.isVisible = isVisible
         if isVisible {
-            print("VideoPlayerView: Video is visible, setting as current")
+            logger.debug("👁️ [\(videoIdentifier)] Video is visible, setting as current")
             if let player = player, player.timeControlStatus != .playing {
                 player.play()
                 isPlaying = true
             }
         } else {
-            print("VideoPlayerView: Video is not visible, pausing")
+            logger.debug("👁️ [\(videoIdentifier)] Video is not visible, pausing")
             player?.pause()
             isPlaying = false
         }
@@ -428,7 +453,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     @MainActor
     func ensurePlayback() {
         if isVisible && !isPlaying {
-            print("VideoPlayerView: Ensuring playback for visible video")
+            logger.debug("▶️ [\(videoIdentifier)] Ensuring playback for visible video")
             player?.play()
             isPlaying = true
         }
@@ -437,11 +462,11 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     @MainActor
     func togglePlayPause() {
         if isPlaying {
-            print("Video PAUSED")
+            logger.debug("⏸️ [\(videoIdentifier)] Video PAUSED")
             player?.pause()
         } else {
             player?.play()
-            print("Video PLAYING")
+            logger.debug("▶️ [\(videoIdentifier)] Video PLAYING")
         }
         isPlaying.toggle()
         showPlayButton = !isPlaying
@@ -453,10 +478,12 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         if !isMuted {
             player?.volume = 1.0
         }
+        logger.debug("🔊 [\(videoIdentifier)] Mute toggled: \(isMuted ? "ON" : "OFF")")
     }
     
     func seekTo(time: Double) {
         let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
         player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        logger.debug("⏩ [\(videoIdentifier)] Seeking to: \(String(format: "%.2f", time))s")
     }
 } 

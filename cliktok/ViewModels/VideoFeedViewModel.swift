@@ -162,9 +162,10 @@ class VideoFeedViewModel: ObservableObject {
             
             lastDocument = snapshot.documents.last
             
-            // Fetch creators and stats
-            await fetchCreators(for: videos)
-            await fetchVideoStats(for: videos)
+            // Fetch creators and stats in parallel
+            async let creatorsTask = fetchCreators(for: videos)
+            async let statsTask = fetchVideoStats(for: videos)
+            _ = await [try await creatorsTask, try await statsTask]
             
             isLoading = false
         } catch {
@@ -191,9 +192,10 @@ class VideoFeedViewModel: ObservableObject {
             videos.append(contentsOf: newVideos)
             lastDocument = snapshot.documents.last
             
-            // Fetch creators and stats for new videos
-            await fetchCreators(for: newVideos)
-            await fetchVideoStats(for: newVideos)
+            // Fetch creators and stats in parallel for new videos
+            async let creatorsTask = fetchCreators(for: newVideos)
+            async let statsTask = fetchVideoStats(for: newVideos)
+            _ = await [try await creatorsTask, try await statsTask]
             
             isLoading = false
         } catch {
@@ -335,16 +337,15 @@ class VideoFeedViewModel: ObservableObject {
             // Combine results
             searchResults = uploadedVideos + archiveResults
             
-            // Fetch creators for uploaded videos
-            await fetchCreators(for: uploadedVideos)
+            // Fetch creators and stats in parallel
+            async let creatorsTask = fetchCreators(for: uploadedVideos)
+            async let statsTask = fetchVideoStats(for: searchResults)
+            _ = await [try await creatorsTask, try await statsTask]
             
             // Add archive user for archive videos
             if !archiveResults.isEmpty {
                 videoCreators["archive_user"] = archiveUser
             }
-            
-            // Fetch stats for all videos
-            await fetchVideoStats(for: searchResults)
             
         } catch {
             searchError = error
