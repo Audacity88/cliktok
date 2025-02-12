@@ -647,6 +647,9 @@ struct VideoControlButtons: View {
     @State private var localTotalTips: Int
     @State private var heartOpacity: Double = 1.0
     @State private var heartScale: CGFloat = 1.0
+    @State private var tipBubbles: [(id: UUID, amount: Double)] = []
+    @State private var lastTipTime: Date = .distantPast
+    @State private var lastHeartResetTime: Date = .distantPast
     
     // Lazy load TipViewModel
     private var tipViewModel: TipViewModel {
@@ -667,6 +670,16 @@ struct VideoControlButtons: View {
         self._localTotalTips = State(initialValue: totalTips)
     }
     
+    private func addTipBubble(amount: Double) {
+        let newBubble = (id: UUID(), amount: amount)
+        tipBubbles.append(newBubble)
+        
+        // Remove the bubble after animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            tipBubbles.removeAll { $0.id == newBubble.id }
+        }
+    }
+    
     var body: some View {
         VStack(spacing: 20) {
             // Like/Tip Button
@@ -684,11 +697,23 @@ struct VideoControlButtons: View {
                         Button(action: {
                             Task {
                                 do {
+                                    // Prevent rapid tapping by checking time since last tip
+                                    let now = Date()
+                                    guard now.timeIntervalSince(lastTipTime) >= 0.2 else { return }
+                                    lastTipTime = now
+                                    
+                                    // Check balance first
+                                    if tipViewModel.balance < 0.01 {
+                                        showAddFundsAlert = true
+                                        return
+                                    }
+                                    
                                     withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
                                         isHeartFilled = true
                                         heartOpacity = 1.0
                                         heartScale = 1.3
-                                        localTotalTips += 1  // Increment immediately for better UX
+                                        localTotalTips += 1
+                                        addTipBubble(amount: 1.0)
                                     }
                                     
                                     // Reset scale after the spring animation
@@ -696,27 +721,38 @@ struct VideoControlButtons: View {
                                         heartScale = 1.0
                                     }
                                     
-                                    guard let videoId = video.id else { return }
-                                    try await tipViewModel.sendMinimumTip(receiverID: video.userID, videoID: videoId)
+                                    // For archive videos, use "archive_user" as receiverID
+                                    let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
+                                    let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
+                                    
+                                    try await tipViewModel.sendMinimumTip(receiverID: receiverID, videoID: videoId)
                                     
                                     withAnimation {
-                                        showTipBubble = true
                                         showTippedText = true
                                     }
                                     
+                                    // Store the time of this tip animation
+                                    let currentTipTime = Date()
+                                    lastHeartResetTime = currentTipTime
+                                    
                                     // Start fade out animations
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        withAnimation(.easeOut(duration: 0.5)) {
-                                            showTipBubble = false
-                                            showTippedText = false
-                                            heartOpacity = 0.3
-                                        }
-                                        
-                                        // Reset heart to unfilled state after fade
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                            withAnimation(.easeOut(duration: 0.3)) {
-                                                isHeartFilled = false
-                                                heartOpacity = 1.0  // Return to full opacity
+                                        // Only proceed with fade out if there hasn't been a more recent tip
+                                        if currentTipTime == lastHeartResetTime {
+                                            withAnimation(.easeOut(duration: 0.5)) {
+                                                showTipBubble = false
+                                                showTippedText = false
+                                                heartOpacity = 0.3
+                                            }
+                                            
+                                            // Reset heart to unfilled state after fade only if no newer tips
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                                if currentTipTime == lastHeartResetTime {
+                                                    withAnimation(.easeOut(duration: 0.3)) {
+                                                        isHeartFilled = false
+                                                        heartOpacity = 1.0  // Return to full opacity
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -755,8 +791,30 @@ struct VideoControlButtons: View {
                                     .shadow(radius: 1)
                             }
                         }
+                        .onLongPressGesture(minimumDuration: 0.2, perform: {}, onPressingChanged: { isPressing in
+                            if isPressing {
+                                // Start rapid tipping when long press begins
+                                let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
+                                let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
+                                tipViewModel.startRapidTipping(receiverID: receiverID, videoID: videoId) { amount in
+                                    withAnimation {
+                                        localTotalTips += 1  // Increment local total for each tip
+                                        addTipBubble(amount: 1.0)  // Always show 1¢ for each tip
+                                    }
+                                }
+                            } else {
+                                // Stop rapid tipping when long press ends
+                                tipViewModel.stopRapidTipping()
+                            }
+                        })
                     }
                     .offset(x: 40, y: 35)
+                    
+                    // Tip bubbles
+                    ForEach(tipBubbles, id: \.id) { bubble in
+                        TipBubbleView(amount: bubble.amount)
+                            .offset(x: 60, y: -30)
+                    }
                     
                     if showTippedText {
                         Text("Tipped!")
@@ -769,7 +827,7 @@ struct VideoControlButtons: View {
                     }
                     
                     if showTipBubble {
-                        TipBubbleView()
+                        TipBubbleView(amount: 1.0)
                             .offset(x: 60, y: -30)
                             .transition(.opacity)
                     }
@@ -903,6 +961,25 @@ struct VideoPlayerView: View {
     
     let onPrefetch: (([Video]) -> Void)?
     
+    // Add shared audio session configuration
+    private static var hasConfiguredAudioSession = false
+    private static let audioSessionQueue = DispatchQueue(label: "com.cliktok.audiosession")
+    private static let logger = Logger(component: "VideoPlayerView.AudioSession")
+    
+    private static func configureAudioSession() {
+        audioSessionQueue.sync {
+            guard !hasConfiguredAudioSession else { return }
+            do {
+                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try AVAudioSession.sharedInstance().setActive(true)
+                hasConfiguredAudioSession = true
+                logger.debug("🎧 Global audio session configured successfully")
+            } catch {
+                logger.error("❌ Failed to configure global audio session: \(error)")
+            }
+        }
+    }
+    
     init(video: Video, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), isVisible: Binding<Bool>, showCreator: Bool = true, onPrefetch: (([Video]) -> Void)? = nil) {
         self.video = video
         self.showBackButton = showBackButton
@@ -912,16 +989,8 @@ struct VideoPlayerView: View {
         self.onPrefetch = onPrefetch
         self._currentViewCount = State(initialValue: video.views)
         
-        // Configure audio session once at init
-        Task { [self] in
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try AVAudioSession.sharedInstance().setActive(true)
-                logger.debug("🎧 Audio session configured successfully for video: \(video.stableId)")
-            } catch {
-                logger.error("❌ Failed to set audio session category for video \(video.stableId): \(error)")
-            }
-        }
+        // Configure audio session using static method
+        Self.configureAudioSession()
     }
     
     private func setupVideo() {
@@ -950,13 +1019,8 @@ struct VideoPlayerView: View {
             await tipViewModel.loadBalance()
             await tipViewModel.loadTipHistory()
             
-            // Update tip count
-            if let videoId = video.id {
-                totalTips = tipViewModel.sentTips.filter { $0.videoID == videoId }.count
-                logger.debug("💝 Total tips for video \(video.stableId): \(totalTips)")
-            } else {
-                logger.warning("⚠️ No Firestore ID available for video: \(video.stableId)")
-            }
+            // Update tip count using the correct videoID (without archive_ prefix)
+            updateTotalTips()
         }
     }
     
@@ -975,9 +1039,23 @@ struct VideoPlayerView: View {
         do {
             logger.debug("📊 Loading initial stats for video \(video.stableId)")
             let views = try await feedViewModel.fetchVideoStats(for: video)
-            await MainActor.run {
-                currentViewCount = views + 1  // Optimistically add 1 to the view count
-                logger.debug("📊 Initial view count loaded and incremented: \(views) + 1")
+            
+            // If views is 0, it might mean the document doesn't exist yet
+            if views == 0 {
+                logger.debug("📊 No existing stats found, creating initial stats document")
+                // Create initial stats by calling updateVideoStats
+                try await feedViewModel.updateVideoStats(video: video)
+                // Fetch the stats again after creation
+                let updatedViews = try await feedViewModel.fetchVideoStats(for: video)
+                await MainActor.run {
+                    currentViewCount = updatedViews
+                    logger.debug("📊 Initial stats created and loaded: \(updatedViews) views")
+                }
+            } else {
+                await MainActor.run {
+                    currentViewCount = views
+                    logger.debug("📊 Loaded existing stats: \(views) views")
+                }
             }
         } catch {
             logger.error("❌ Failed to load initial stats: \(error.localizedDescription)")
@@ -1024,14 +1102,15 @@ struct VideoPlayerView: View {
             try await feedViewModel.updateVideoStats(video: video)
             hasUpdatedStats = true
             
-            // No need to update the UI since we already incremented optimistically
+            // Fetch the updated view count to ensure accuracy
+            let updatedViews = try await feedViewModel.fetchVideoStats(for: video)
+            await MainActor.run {
+                currentViewCount = updatedViews
+                logger.debug("📊 Updated view count from Firebase: \(updatedViews)")
+            }
+            
             logger.success("✅ View count updated successfully in Firebase")
         } catch {
-            // If Firebase update fails, revert the optimistic update
-            await MainActor.run {
-                currentViewCount -= 1
-                logger.debug("📊 Reverted optimistic update due to error")
-            }
             logger.error("❌ Failed to update view count: \(error.localizedDescription)")
         }
     }
@@ -1079,6 +1158,22 @@ struct VideoPlayerView: View {
         }
     }
     
+    private func cleanupVideo() {
+        guard isVisible else { return }  // Only cleanup if currently visible
+        logger.debug("🧹 Cleaning up video: \(video.stableId)")
+        playerViewModel.cleanupPlayer()
+    }
+    
+    private func updateTotalTips() {
+        // For archive videos, use the statsDocumentId with archive_ prefix
+        let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
+        
+        // Filter tips for this video using the videoId
+        let videoTips = tipViewModel.sentTips.filter { $0.videoID == videoId }
+        totalTips = Int(videoTips.reduce(0.0) { $0 + $1.amount } * 100) // Convert dollars to cents
+        logger.debug("💰 Total tips for video \(videoId): \(totalTips)¢")
+    }
+    
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .top) {
@@ -1116,7 +1211,7 @@ struct VideoPlayerView: View {
                     showDeleteAlert: $showDeleteAlert,
                     onDismiss: {
                         logger.debug("Dismissing video player")
-                        playerViewModel.cleanupPlayer()
+                        cleanupVideo()
                         clearSearchOnDismiss = true
                         dismiss()
                     }
@@ -1135,8 +1230,8 @@ struct VideoPlayerView: View {
             setupVideo()
         }
         .onDisappear {
-            logger.debug("VideoPlayerView disappearing, cleaning up")
-            playerViewModel.cleanupPlayer()
+            logger.debug("VideoPlayerView disappearing")
+            cleanupVideo()
         }
         .onChange(of: isVisible, perform: handleVisibilityChange)
         .onChange(of: showEditSheet, perform: handleEditSheetChange)
@@ -1148,10 +1243,7 @@ struct VideoPlayerView: View {
             }
         }
         .onReceive(tipViewModel.$sentTips) { newTips in
-            if let videoId = video.id {
-                totalTips = newTips.filter { $0.videoID == videoId }.count
-                logger.debug("Updated total tips: \(totalTips)")
-            }
+            updateTotalTips()
         }
         .sheet(isPresented: $showEditSheet) {
             VideoEditView(video: video, isPresented: $showEditSheet)
@@ -1255,8 +1347,6 @@ private struct VideoOverlayContent: View {
                         Image(systemName: "chevron.left")
                             .font(.title2)
                             .foregroundColor(.white)
-                            .padding()
-                            .background(Circle().fill(Color.black.opacity(0.5)))
                     }
                     .padding(.leading)
                     

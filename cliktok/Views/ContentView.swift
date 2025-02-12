@@ -144,6 +144,16 @@ struct ContentView: View {
                         }
                         .tag(2)
                         
+                        // Wallet tab
+                        NavigationStack {
+                            WalletView()
+                        }
+                        .tabItem {
+                            Image(systemName: "dollarsign.circle.fill")
+                            Text("Wallet")
+                        }
+                        .tag(3)
+                        
                         // Search Tab
                         NavigationStack {
                             AISearchView()
@@ -152,16 +162,6 @@ struct ContentView: View {
                         .tabItem {
                             Image(systemName: "magnifyingglass.circle.fill")
                             Text("Search")
-                        }
-                        .tag(3)
-                        
-                        // Wallet tab
-                        NavigationStack {
-                            WalletView()
-                        }
-                        .tabItem {
-                            Image(systemName: "dollarsign.circle.fill")
-                            Text("Wallet")
                         }
                         .tag(4)
                         

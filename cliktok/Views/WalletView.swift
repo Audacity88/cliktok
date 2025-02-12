@@ -4,26 +4,42 @@ import StripePaymentSheet
 // MARK: - Supporting Views
 
 struct TipHistoryRow: View {
-    let tip: Tip
+    let tips: [Tip]
     let isReceived: Bool
+    
+    private var totalAmount: Double {
+        tips.reduce(0) { $0 + $1.amount }
+    }
+    
+    private var formattedDate: String {
+        if let mostRecentTip = tips.max(by: { $0.timestamp < $1.timestamp }) {
+            if tips.count > 1 {
+                return "\(mostRecentTip.timestamp.formatted(date: .numeric, time: .shortened)) (\(tips.count) tips)"
+            } else {
+                return mostRecentTip.timestamp.formatted(date: .numeric, time: .shortened)
+            }
+        }
+        return ""
+    }
     
     var body: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text("\(isReceived ? "+" : "-")$\(String(format: "%.2f", tip.amount))")
-                    .bold()
-                    .foregroundColor(isReceived ? .green : .primary)
-                Text(tip.timestamp, style: .date)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text("$\(String(format: "%.2f", totalAmount))")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.green)
+                Text(formattedDate)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.gray)
             }
             
             Spacer()
             
-            Text("\(isReceived ? "From" : "To"): \(isReceived ? tip.senderID : tip.receiverID)")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            Text("To: \(tips[0].receiverID)")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.gray)
         }
+        .padding(.vertical, 4)
     }
 }
 
@@ -33,9 +49,11 @@ struct BalanceRow: View {
     var body: some View {
         HStack {
             Text("Current Balance")
+                .font(.system(.body, design: .monospaced))
             Spacer()
             Text("$\(String(format: "%.2f", balance))")
-                .bold()
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.green)
         }
     }
 }
@@ -49,11 +67,14 @@ struct AddFundsRow: View {
         Button(action: onTap) {
             HStack {
                 Text("Add $\(String(format: "%.2f", amount))")
+                    .font(.system(.body, design: .monospaced))
                 Spacer()
                 if isPurchasing {
                     ProgressView()
+                        .tint(.green)
                 } else {
                     Image(systemName: "plus.circle.fill")
+                        .foregroundColor(.green)
                 }
             }
         }
@@ -97,14 +118,35 @@ struct TipsSection: View {
     let tips: [Tip]
     let isReceived: Bool
     
+    private var consolidatedTips: [(id: String, tips: [Tip])] {
+        let groupedTips = Dictionary(grouping: tips) { tip in
+            let id = isReceived ? tip.senderID : tip.receiverID
+            let timeWindow = Int(tip.timestamp.timeIntervalSince1970 / 30)
+            return "\(id)-\(timeWindow)"
+        }
+        
+        return groupedTips.map { key, tips in
+            let latestTip = tips.max(by: { $0.timestamp < $1.timestamp })
+            return (
+                id: "\(key)-\(tips.count)-\(latestTip?.timestamp.timeIntervalSince1970 ?? 0)",
+                tips: tips
+            )
+        }.sorted { group1, group2 in
+            let latest1 = group1.tips.max(by: { $0.timestamp < $1.timestamp })?.timestamp ?? Date.distantPast
+            let latest2 = group2.tips.max(by: { $0.timestamp < $1.timestamp })?.timestamp ?? Date.distantPast
+            return latest1 > latest2
+        }
+    }
+    
     var body: some View {
-        Section(title) {
+        Section(header: Text(title).font(.system(.headline, design: .monospaced))) {
             if tips.isEmpty {
                 Text("No tips \(isReceived ? "received" : "sent")")
-                    .foregroundColor(.secondary)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.gray)
             } else {
-                ForEach(tips) { tip in
-                    TipHistoryRow(tip: tip, isReceived: isReceived)
+                ForEach(consolidatedTips, id: \.id) { group in
+                    TipHistoryRow(tips: group.tips, isReceived: isReceived)
                 }
             }
         }
@@ -149,23 +191,27 @@ private struct WalletContentView: View {
             Section {
                 Button(isLoading ? "Loading..." : "Pay with Card") {
                     Task {
-                        // Set a default amount of $10.00
                         viewModel.selectedAmount = 10.00
                         await handlePayment()
                     }
                 }
+                .font(.system(.body, design: .monospaced))
+                .foregroundColor(.green)
                 .disabled(isLoading)
                 
                 if let result = paymentResult {
                     switch result {
                     case .completed:
                         Text("Payment completed!")
+                            .font(.system(.body, design: .monospaced))
                             .foregroundColor(.green)
                     case .canceled:
                         Text("Payment canceled.")
+                            .font(.system(.body, design: .monospaced))
                             .foregroundColor(.orange)
                     case .failed(let error):
                         Text("Payment failed: \(error.localizedDescription)")
+                            .font(.system(.body, design: .monospaced))
                             .foregroundColor(.red)
                     }
                 }
@@ -175,12 +221,6 @@ private struct WalletContentView: View {
                 tipAmounts: viewModel.tipAmounts,
                 isPurchasing: viewModel.isPurchasing,
                 onAddFunds: handleAddFunds
-            )
-            
-            TipsSection(
-                title: "Tips Received",
-                tips: viewModel.receivedTips,
-                isReceived: true
             )
             
             TipsSection(
@@ -217,8 +257,10 @@ private struct WalletContentView: View {
                 onDismiss()
                 triggerDataReload()
             }
+            .font(.system(.body, design: .monospaced))
         } message: {
             Text("Payment successful! Your balance has been updated.")
+                .font(.system(.body, design: .monospaced))
         }
     }
     

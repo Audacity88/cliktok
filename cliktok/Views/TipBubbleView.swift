@@ -3,9 +3,11 @@ import SwiftUI
 struct TipBubbleView: View {
     @State private var yOffset: CGFloat = 0
     @State private var opacity: Double = 1.0
+    let amount: Double
+    var onComplete: (() -> Void)?
     
     var body: some View {
-        Text("1¢")
+        Text("\(Int(amount))¢")
             .font(.system(size: 14, weight: .bold))
             .foregroundColor(.white)
             .padding(8)
@@ -20,6 +22,11 @@ struct TipBubbleView: View {
                     yOffset = -100
                     opacity = 0
                 }
+                
+                // Schedule completion callback after animation duration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    onComplete?()
+                }
             }
     }
 }
@@ -27,6 +34,6 @@ struct TipBubbleView: View {
 #Preview {
     ZStack {
         Color.black
-        TipBubbleView()
+        TipBubbleView(amount: 1.0)
     }
 }

@@ -30,12 +30,18 @@ class TipViewModel: ObservableObject {
     @Published var showSuccessAlert = false
     @Published var paymentSheet: PaymentSheet?
     @Published var isPaymentSheetPresented = false
+    @Published var isRapidTipping = false
     
     private let db = Firestore.firestore()
     private var hasInitialized = false
     private lazy var stripeService = StripeService.shared
     
     let tipAmounts = [1.00, 5.00, 10.00, 20.00]
+    
+    private var rapidTipTask: Task<Void, Never>?
+    private var lastTipTime: Date?
+    private let minimumTipInterval: TimeInterval = 0.1 // 100ms between tips
+    private var onTipCallback: ((Double) -> Void)?
     
     var isPurchasing: Bool {
         isProcessing
@@ -164,7 +170,17 @@ class TipViewModel: ObservableObject {
         switch result {
         case .completed:
             print("Payment completed!")
-            await loadBalance()
+            // Update development balance with the selected amount
+            if let amount = selectedAmount {
+                let oldBalance = balance
+                let newBalance = oldBalance + amount
+                balance = newBalance
+                setDevelopmentBalance(newBalance)
+                logBalanceChange(oldBalance: oldBalance, 
+                               newBalance: newBalance, 
+                               reason: "Added Funds",
+                               details: ["amount": amount])
+            }
             showSuccessAlert = true
             
         case .canceled:
@@ -281,23 +297,14 @@ class TipViewModel: ObservableObject {
         
         let oldBalance = balance
         
-        // Create transaction record
-        let transaction = Transaction(
-            userID: userId,
-            type: .tip,
-            amount: amount,
-            status: .completed,
-            description: "Tip for video \(videoID)"
-        )
-        
-        // Create tip record
+        // Create tip record with minimal data for rapid tipping
         let tip = Tip(
             amount: amount,
             timestamp: Date(),
-            videoID: videoID,
+            videoID: videoID,  // Keep the videoID as is, with archive_ prefix if present
             senderID: userId,
             receiverID: receiverID,
-            transactionID: transaction.id
+            transactionID: UUID().uuidString
         )
         
         do {
@@ -305,26 +312,33 @@ class TipViewModel: ObservableObject {
             let tipRef = db.collection("tips").document()
             try tipRef.setData(from: tip)
             
-            // Update balance
+            // Update balance in memory and UserDefaults
             balance -= amount
+            setDevelopmentBalance(balance)
             
-            // Log balance change
-            logBalanceChange(
-                oldBalance: oldBalance,
-                newBalance: balance,
-                reason: "Tip Sent",
-                details: [
-                    "tipId": tipRef.documentID,
-                    "videoId": videoID,
-                    "receiverId": receiverID
-                ]
-            )
+            // Only log balance changes for non-rapid tips or at intervals
+            if !isRapidTipping || lastTipTime == nil || 
+               Date().timeIntervalSince(lastTipTime!) > 1.0 {
+                logBalanceChange(
+                    oldBalance: oldBalance,
+                    newBalance: balance,
+                    reason: isRapidTipping ? "Rapid Tip" : "Tip Sent",
+                    details: [
+                        "tipId": tipRef.documentID,
+                        "videoId": videoID,
+                        "receiverId": receiverID
+                    ]
+                )
+            }
             
-            // Refresh tip history
-            await loadTipHistory()
+            // Only refresh tip history periodically during rapid tipping
+            if !isRapidTipping {
+                await loadTipHistory()
+            }
         } catch {
             // Revert balance on failure
             balance = oldBalance
+            setDevelopmentBalance(oldBalance)
             throw error
         }
     }
@@ -380,5 +394,52 @@ class TipViewModel: ObservableObject {
         let (data, _) = try await URLSession.shared.data(from: url)
         let config = try JSONDecoder().decode(StripeConfig.self, from: data)
         return config.publishableKey
+    }
+    
+    func startRapidTipping(receiverID: String, videoID: String, onTip: @escaping (Double) -> Void) {
+        guard !isRapidTipping else { return }
+        isRapidTipping = true
+        lastTipTime = nil
+        onTipCallback = onTip
+        
+        rapidTipTask = Task { @MainActor in
+            while !Task.isCancelled && isRapidTipping {
+                // Check if enough time has passed since last tip
+                let now = Date()
+                if let lastTip = lastTipTime, 
+                   now.timeIntervalSince(lastTip) < minimumTipInterval {
+                    try? await Task.sleep(nanoseconds: UInt64(0.05 * 1_000_000_000))
+                    continue
+                }
+                
+                // Check balance before attempting tip
+                guard balance >= 0.01 else {
+                    isRapidTipping = false
+                    break
+                }
+                
+                do {
+                    try await processTip(amount: 0.01, receiverID: receiverID, videoID: videoID)
+                    lastTipTime = Date()
+                    onTipCallback?(0.01)
+                } catch {
+                    print("Rapid tipping error: \(error)")
+                    isRapidTipping = false
+                    break
+                }
+                
+                // Small delay to prevent overwhelming the system
+                try? await Task.sleep(nanoseconds: UInt64(0.05 * 1_000_000_000))
+            }
+            isRapidTipping = false
+            onTipCallback = nil
+        }
+    }
+    
+    func stopRapidTipping() {
+        isRapidTipping = false
+        rapidTipTask?.cancel()
+        rapidTipTask = nil
+        onTipCallback = nil
     }
 }

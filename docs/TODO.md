@@ -2,15 +2,20 @@
 
 ## High Priority
 - [ ] Add age-dating functionality for videos in Submissions feed
+- [ ] Make tips and views persist on archive videos
 - [ ] Complete terminal interface integration
   - [ ] Add video preview capability in terminal responses
   - [ ] Implement direct video playback from terminal
   - [ ] Add more terminal commands (e.g., 'play', 'info', 'stats')
 - [ ] Enhance retro UI elements
+  - [ ] Fix position of blinking cursor
   - [ ] Add CRT screen effect
   - [ ] Add typing sound effects
   - [ ] Add screen flicker effect
   - [ ] Add command history navigation (up/down arrows)
+- [ ] Views
+  - [ ] Add my tipped videos
+  - [ ] Home/collections
 
 ## Features
 - [ ] Terminal Commands

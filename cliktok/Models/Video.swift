@@ -22,8 +22,15 @@ struct Video: Identifiable, Codable {
     
     // Stable identifier for local use, independent of Firestore document ID
     var stableId: String {
-        if userID == "archive_user", let archiveId = archiveIdentifier {
-            return "archive_\(archiveId)"
+        if isArchiveVideo {
+            if let archiveId = archiveIdentifier {
+                return "archive_\(archiveId)"
+            }
+            // For archive videos without an identifier, use the video URL to create a stable ID
+            if let urlComponents = URLComponents(string: videoURL),
+               let pathComponents = urlComponents.path.components(separatedBy: "/").last {
+                return "archive_\(pathComponents)"
+            }
         }
         return id ?? UUID().uuidString
     }
@@ -41,7 +48,7 @@ struct Video: Identifiable, Codable {
         if userID == "archive_user", let archiveId = archiveIdentifier {
             return archiveId
         }
-        return id ?? UUID().uuidString
+        return stableId
     }
     
     // Make the Identifiable protocol use stableId instead of id
