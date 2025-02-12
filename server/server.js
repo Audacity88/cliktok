@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env.local') });
 
 // Validate required environment variables
 const requiredEnvVars = ['STRIPE_SECRET_KEY', 'STRIPE_PUBLISHABLE_KEY'];
@@ -20,15 +21,20 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY, {
     }
 });
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 8080;
 
 // Enable CORS for all routes with specific configuration
 app.use(cors({
     origin: '*', // Allow all origins in development
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
-    credentials: true
+    credentials: true,
+    preflightContinue: true,
+    optionsSuccessStatus: 204
 }));
+
+// Add OPTIONS handler for preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -107,6 +113,34 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Add after the other app.get routes
+
+app.get('/server-info', (req, res) => {
+    const { networkInterfaces } = require('os');
+    const nets = networkInterfaces();
+    const addresses = [];
+
+    // Collect all IPv4 addresses
+    for (const name of Object.keys(nets)) {
+        for (const net of nets[name]) {
+            // Skip internal and non-IPv4 addresses
+            if (net.family === 'IPv4' && !net.internal) {
+                addresses.push({
+                    interface: name,
+                    address: net.address,
+                    url: `http://${net.address}:${port}`
+                });
+            }
+        }
+    }
+
+    res.json({
+        addresses,
+        port,
+        mode: process.env.NODE_ENV || 'development'
+    });
+});
+
 // Start server
 const server = app.listen(port, '0.0.0.0', () => {
     const { networkInterfaces } = require('os');
@@ -115,29 +149,32 @@ const server = app.listen(port, '0.0.0.0', () => {
     console.log('\n=== Server Started ===');
     console.log('Time:', new Date().toISOString());
     console.log('Environment:', process.env.NODE_ENV || 'development');
-    console.log('\nListening on:');
-    console.log(`  - http://localhost:${port}`);
-    console.log(`  - http://127.0.0.1:${port}`);
+    console.log('\nListening on all network interfaces:');
+    console.log(`Port: ${port}`);
     
-    console.log('\nNetwork Interfaces:');
+    // Log all available interfaces and their addresses
     for (const name of Object.keys(nets)) {
         for (const net of nets[name]) {
             if (net.family === 'IPv4') {
-                console.log(`  - ${name}: ${net.address}`);
-                console.log(`    http://${net.address}:${port}`);
+                console.log(`\nInterface: ${name}`);
+                console.log(`  Address: ${net.address}`);
+                console.log(`  URL: http://${net.address}:${port}`);
+                console.log(`  Internal: ${net.internal}`);
+                console.log(`  CIDR: ${net.cidr}`);
             }
         }
     }
-    console.log('\nServer is ready to accept connections');
+    
+    console.log('\nServer is ready to accept connections from any interface');
 });
 
-// Enable keep-alive with shorter timeouts for development
-server.keepAliveTimeout = 5000; // 5 seconds
-server.headersTimeout = 6000; // 6 seconds
+// Increase the timeout values
+server.keepAliveTimeout = 61000;
+server.headersTimeout = 62000;
 
-// Add request timeout middleware
+// Add request timeout middleware with longer timeout
 app.use((req, res, next) => {
-    res.setTimeout(5000, () => {
+    res.setTimeout(30000, () => {
         console.log('Request has timed out.');
         res.status(408).send('Request has timed out');
     });

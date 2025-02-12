@@ -102,6 +102,17 @@ struct ContentView: View {
             } else if authManager.isAuthenticated {
                 ZStack(alignment: .top) {
                     TabView(selection: $selectedTab) {
+                        // Terminal Tab (Main)
+                        NavigationStack {
+                            TerminalView()
+                                .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "terminal")
+                            Text("Terminal")
+                        }
+                        .tag(0)
+                        
                         // Archive Tab
                         NavigationStack {
                             UnifiedVideoView(mode: .archive)
@@ -111,18 +122,18 @@ struct ContentView: View {
                             Image(systemName: "tv")
                             Text("Archive")
                         }
-                        .tag(0)
+                        .tag(1)
                         
-                        // Home Tab
+                        // Submissions Tab (renamed from Home)
                         NavigationStack {
                             UnifiedVideoView(mode: .feed)
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
                             Image(systemName: "house.fill")
-                            Text("Home")
+                            Text("Submissions")
                         }
-                        .tag(1)
+                        .tag(2)
                         
                         // Search Tab
                         NavigationStack {
@@ -133,9 +144,9 @@ struct ContentView: View {
                             Image(systemName: "sparkles.magnifyingglass")
                             Text("Search")
                         }
-                        .tag(2)
+                        .tag(3)
                         
-                        // Keep existing Wallet tab
+                        // Wallet Tab
                         NavigationStack {
                             WalletView()
                         }
@@ -143,9 +154,9 @@ struct ContentView: View {
                             Image(systemName: "dollarsign.circle.fill")
                             Text("Wallet")
                         }
-                        .tag(3)
+                        .tag(4)
                         
-                        // Keep existing Upload tab
+                        // Upload Tab
                         NavigationStack {
                             VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
                                 switchToTab(0)
@@ -157,9 +168,9 @@ struct ContentView: View {
                             Image(systemName: "plus.square.fill")
                             Text("Upload")
                         }
-                        .tag(4)
+                        .tag(5)
                         
-                        // Keep existing Profile tab
+                        // Profile Tab
                         NavigationStack {
                             ProfileView()
                                 .environmentObject(feedViewModel)
@@ -168,7 +179,7 @@ struct ContentView: View {
                             Image(systemName: "person.fill")
                             Text("Profile")
                         }
-                        .tag(5)
+                        .tag(6)
                     }
                     .accentColor(.green)
                 }

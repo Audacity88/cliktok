@@ -39,12 +39,15 @@ class StripeService {
     
     // Backend URL - using localhost for testing
     private var baseURL: String {
-        #if targetEnvironment(simulator)
-        return "http://127.0.0.1:3000"
-        #else
-        // Use Mac's IP address when running on physical device
-        return "http://192.168.1.69:3000"
-        #endif
+        get async {
+            do {
+                let url = try await Configuration.getServerURL()
+                return url.absoluteString
+            } catch {
+                print("Failed to get server URL: \(error)")
+                return "http://10.10.2.1:3000"  // Fallback to Mac's en0 IP
+            }
+        }
     }
     
     private init() {
@@ -56,8 +59,11 @@ class StripeService {
         StripeAPI.defaultPublishableKey = ""
         #endif
         
-        print("StripeService initialized with baseURL: \(baseURL)")
-        print("StripeService initialized with publishable key: \(StripeAPI.defaultPublishableKey)")
+        Task {
+            let url = await baseURL
+            print("StripeService initialized with baseURL: \(url)")
+            print("StripeService initialized with publishable key: \(StripeAPI.defaultPublishableKey)")
+        }
         setupNetworkMonitoring()
     }
     
@@ -99,14 +105,15 @@ class StripeService {
     }
     
     private func checkServerHealth() async {
-        guard let url = URL(string: "\(baseURL)/health") else { return }
+        let url = await baseURL
+        guard let healthURL = URL(string: "\(url)/health") else { return }
         
         let session = createURLSession()
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: healthURL)
         request.timeoutInterval = 3 // Reduced from 5
         
         do {
-            print("\nAttempting server health check at: \(url.absoluteString)")
+            print("\nAttempting server health check at: \(healthURL.absoluteString)")
             let (data, response) = try await session.data(for: request)
             
             if let httpResponse = response as? HTTPURLResponse {
@@ -136,7 +143,8 @@ class StripeService {
     func configurePaymentSheet(amount: Double, currency: String = "usd") async throws -> PaymentSheet {
         let amountInCents = Int(amount * 100)
         
-        let backendUrl = URL(string: "\(baseURL)/create-payment-intent")!
+        let url = await baseURL
+        let backendUrl = URL(string: "\(url)/create-payment-intent")!
         var request = URLRequest(url: backendUrl)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

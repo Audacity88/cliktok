@@ -3,6 +3,19 @@ import FirebaseFirestore
 import Foundation
 import StripePaymentSheet
 
+// Add these types before the TipViewModel class
+private struct StripeConfig: Codable {
+    let publishableKey: String
+    let mode: String
+    let isTestMode: Bool
+}
+
+private struct StripePaymentIntentResponse: Codable {
+    let clientSecret: String
+    let paymentIntentId: String
+    let publishableKey: String
+}
+
 @MainActor
 class TipViewModel: ObservableObject {
     static let shared = TipViewModel()
@@ -100,7 +113,8 @@ class TipViewModel: ObservableObject {
         defer { isProcessing = false }
         
         do {
-            let backendUrl = URL(string: "http://192.168.1.69:3000/create-payment-intent")!
+            let serverURL = try await Configuration.getServerURL()
+            let backendUrl = serverURL.appendingPathComponent("create-payment-intent")
             
             var request = URLRequest(url: backendUrl)
             request.httpMethod = "POST"
@@ -339,5 +353,32 @@ class TipViewModel: ObservableObject {
         } catch {
             print("Error loading tip history: \(error)")
         }
+    }
+    
+    private func createPaymentIntent(amount: Double) async throws -> String {
+        let serverURL = try await Configuration.getServerURL()
+        let url = serverURL.appendingPathComponent("create-payment-intent")
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Convert amount to cents
+        let amountInCents = Int(amount * 100)
+        let body = ["amount": amountInCents]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let response = try JSONDecoder().decode(StripePaymentIntentResponse.self, from: data)
+        return response.clientSecret
+    }
+    
+    private func fetchStripeConfig() async throws -> String {
+        let serverURL = try await Configuration.getServerURL()
+        let url = serverURL.appendingPathComponent("config")
+        
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let config = try JSONDecoder().decode(StripeConfig.self, from: data)
+        return config.publishableKey
     }
 }

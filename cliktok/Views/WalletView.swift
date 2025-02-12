@@ -196,13 +196,16 @@ private struct WalletContentView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbarBackground(colorScheme == .dark ? Color.black : Color.white, for: .navigationBar)
-        .onAppear(perform: loadData)
+        .onAppear {
+            triggerDataReload()
+        }
         .fullScreenCover(isPresented: $viewModel.isPaymentSheetPresented) {
             if let paymentSheet = viewModel.paymentSheet {
                 PaymentSheetViewController(paymentSheet: paymentSheet) { result in
                     viewModel.isPaymentSheetPresented = false
                     Task {
                         await viewModel.handlePaymentCompletion(result)
+                        await loadData()
                     }
                 }
                 .edgesIgnoringSafeArea(.all)
@@ -212,22 +215,32 @@ private struct WalletContentView: View {
         .alert("Success", isPresented: $viewModel.showSuccessAlert) {
             Button("OK", role: .cancel) {
                 onDismiss()
+                triggerDataReload()
             }
         } message: {
             Text("Payment successful! Your balance has been updated.")
         }
     }
     
-    private func loadData() {
+    private func loadData() async {
+        await viewModel.loadBalance()
+        await viewModel.loadTipHistory()
+    }
+    
+    private func triggerDataReload() {
         Task {
-            await viewModel.loadBalance()
-            await viewModel.loadTipHistory()
+            await loadData()
         }
     }
     
     private func handleAddFunds(_ amount: Double) {
         Task {
-            try? await viewModel.addFunds(amount)
+            do {
+                try await viewModel.addFunds(amount)
+                await loadData()
+            } catch {
+                print("Payment error: \(error.localizedDescription)")
+            }
         }
     }
     
@@ -236,6 +249,7 @@ private struct WalletContentView: View {
         
         do {
             try await viewModel.addFunds(amount)
+            await loadData()
         } catch {
             print("Payment error: \(error.localizedDescription)")
         }
