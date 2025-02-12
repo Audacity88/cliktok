@@ -407,7 +407,6 @@ actor InternetArchiveAPI {
                 let videoURL = Self.getVideoURL(identifier: metadata.metadata.identifier)
                 
                 let video = ArchiveVideo(
-                    archiveIdentifier: metadata.metadata.identifier,
                     title: file.title ?? metadata.metadata.title ?? file.name,
                     videoURL: videoURL,
                     description: file.description ?? metadata.metadata.description ?? ""

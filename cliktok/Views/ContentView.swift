@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import FirebaseAuth
 import UIKit
+import os
 
 struct RetroStatusBar: View {
     @State private var currentTime = Date()
@@ -51,6 +52,8 @@ struct ContentView: View {
     @State private var scrollToTop = false
     @State private var isLoading = true
     
+    private let logger = Logger(subsystem: "gauntletai.cliktok", category: "ContentView")
+    
     // Use the shared instance as a StateObject to observe changes
     @StateObject private var authManager = AuthenticationManager.shared
     
@@ -84,6 +87,8 @@ struct ContentView: View {
         // Enable more items
         UITabBar.appearance().itemPositioning = .centered
         UITabBar.appearance().itemSpacing = 32
+        
+        logger.debug("🎨 ContentView initialized with UI appearance configuration")
     }
     
     func switchToTab(_ tab: Int) {
@@ -121,11 +126,11 @@ struct ContentView: View {
                         
                         // Search Tab
                         NavigationStack {
-                            HashtagSearchView()
+                            AISearchView()
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
-                            Image(systemName: "magnifyingglass")
+                            Image(systemName: "sparkles.magnifyingglass")
                             Text("Search")
                         }
                         .tag(2)
@@ -172,7 +177,10 @@ struct ContentView: View {
             }
         }
         .task {
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            logger.debug("👀 ContentView appeared, checking initialization state")
+            // Give time for Firebase and other services to initialize
+            await Task.yield()
+            logger.debug("✨ Initialization complete, removing loading screen")
             isLoading = false
         }
         .statusBar(hidden: true)

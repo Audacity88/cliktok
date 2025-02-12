@@ -613,6 +613,7 @@ struct VideoPlayerView: View {
             }
             .navigationBarHidden(true)
             .edgesIgnoringSafeArea(.all)
+            .statusBar(hidden: true)  // Hide the system status bar
         }
         .onAppear(perform: setupVideo)
         .onDisappear {

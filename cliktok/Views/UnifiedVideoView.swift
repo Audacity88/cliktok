@@ -126,7 +126,16 @@ struct VideoList: View {
                 .rotationEffect(.degrees(-90))
                 .tag(index)
                 .task(id: index) {
-                    guard index == selectedIndex else { return }
+                    guard index == selectedIndex else {
+                        // Immediately cleanup video when it's no longer selected
+                        if let url = URL(string: video.videoURL) {
+                            print("UnifiedVideoView: Immediate cleanup of video at index \(index)")
+                            Task {
+                                await VideoAssetLoader.shared.cleanupAsset(for: url)
+                            }
+                        }
+                        return
+                    }
                     print("UnifiedVideoView: Video \(index) appeared")
                     
                     if index >= videos.count - 2 {
@@ -379,6 +388,7 @@ struct UnifiedVideoView: View {
                 )
                 .offset(x: dragOffset.width)
         }
+        .statusBar(hidden: true)
     }
     
     private var isLoading: Bool {
@@ -483,8 +493,8 @@ struct UnifiedVideoView: View {
     }
     
     private func cleanupDistantVideos(currentIndex: Int) {
-        // Increase buffer size to keep more videos in memory
-        let bufferSize = 4  // Keep 4 videos on each side instead of 2
+        // Reduce buffer size to clean up videos more aggressively
+        let bufferSize = 2  // Keep only 2 videos on each side
         let lowerBound = max(0, currentIndex - bufferSize)
         let upperBound = min(currentIndex + bufferSize, currentVideos.count - 1)
         
@@ -496,14 +506,14 @@ struct UnifiedVideoView: View {
         let keepRange = lowerBound...upperBound
         print("UnifiedVideoView: Keeping videos in range \(keepRange)")
         
-        // Only cleanup videos that are well outside our buffer range
+        // Cleanup videos outside our buffer range immediately
         for (index, video) in currentVideos.enumerated() {
-            // Add additional check to ensure video is far enough from current index
-            let distanceFromCurrent = abs(index - currentIndex)
-            if !keepRange.contains(index) && distanceFromCurrent > bufferSize {
+            if !keepRange.contains(index) {
                 if let url = URL(string: video.videoURL) {
-                    print("UnifiedVideoView: Cleaning up video at index \(index), distance from current: \(distanceFromCurrent)")
-                    VideoAssetLoader.shared.cleanupAsset(for: url)
+                    print("UnifiedVideoView: Immediate cleanup of video at index \(index)")
+                    Task {
+                        await VideoAssetLoader.shared.cleanupAsset(for: url)
+                    }
                 }
             }
         }
