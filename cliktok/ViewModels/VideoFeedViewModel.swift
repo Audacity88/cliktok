@@ -35,6 +35,119 @@ class VideoFeedViewModel: ObservableObject {
         videoCreators["archive_user"] = archiveUser
     }
     
+    private func fetchVideoStats(for videos: [Video]) async {
+        print("VideoFeedViewModel: -------- Starting Stats Fetch --------")
+        print("VideoFeedViewModel: Total videos to fetch stats for: \(videos.count)")
+        print("VideoFeedViewModel: Video IDs: \(videos.map { $0.stableId }.joined(separator: ", "))")
+        
+        // Group videos by type (archive vs regular)
+        let archiveVideos = videos.filter { $0.isArchiveVideo }
+        let regularVideos = videos.filter { !$0.isArchiveVideo }
+        print("VideoFeedViewModel: Found \(archiveVideos.count) archive videos and \(regularVideos.count) regular videos")
+        
+        // Fetch archive video stats
+        if !archiveVideos.isEmpty {
+            let archiveIds = archiveVideos.map { $0.statsDocumentId }
+            print("VideoFeedViewModel: Fetching archive stats for IDs: \(archiveIds.joined(separator: ", "))")
+            
+            do {
+                let snapshot = try await db.collection("archive_video_stats")
+                    .whereField(FieldPath.documentID(), in: archiveIds)
+                    .getDocuments()
+                
+                print("VideoFeedViewModel: Retrieved \(snapshot.documents.count) archive stat documents")
+                
+                let stats = snapshot.documents.reduce(into: [String: [String: Any]]()) { dict, doc in
+                    dict[doc.documentID] = doc.data()
+                }
+                print("VideoFeedViewModel: Parsed stats data: \(stats)")
+                
+                // Update archive video views in both arrays
+                for video in archiveVideos {
+                    print("VideoFeedViewModel: Processing archive video: \(video.stableId)")
+                    if let videoStats = stats[video.statsDocumentId] {
+                        let views = videoStats["views"] as? Int ?? 0
+                        print("VideoFeedViewModel: Found stats for \(video.stableId) - views: \(views)")
+                        
+                        // Update in main videos array
+                        if let index = self.videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                            print("VideoFeedViewModel: Updating main array at index \(index)")
+                            self.videos[index].views = views
+                        } else {
+                            print("VideoFeedViewModel: Video not found in main array")
+                        }
+                        
+                        // Update in search results array
+                        if let index = self.searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                            print("VideoFeedViewModel: Updating search results at index \(index)")
+                            self.searchResults[index].views = views
+                        } else {
+                            print("VideoFeedViewModel: Video not found in search results")
+                        }
+                    } else {
+                        print("VideoFeedViewModel: No stats found for archive video: \(video.stableId)")
+                    }
+                }
+            } catch {
+                print("VideoFeedViewModel: Error fetching archive stats: \(error)")
+                print("VideoFeedViewModel: Full error details: \(error)")
+            }
+        }
+        
+        // Fetch regular video stats
+        if !regularVideos.isEmpty {
+            let regularIds = regularVideos.map { $0.statsDocumentId }
+            print("VideoFeedViewModel: Fetching regular stats for IDs: \(regularIds.joined(separator: ", "))")
+            
+            do {
+                let snapshot = try await db.collection("video_stats")
+                    .whereField(FieldPath.documentID(), in: regularIds)
+                    .getDocuments()
+                
+                print("VideoFeedViewModel: Retrieved \(snapshot.documents.count) regular stat documents")
+                
+                let stats = snapshot.documents.reduce(into: [String: [String: Any]]()) { dict, doc in
+                    dict[doc.documentID] = doc.data()
+                }
+                print("VideoFeedViewModel: Parsed stats data: \(stats)")
+                
+                // Update regular video views in both arrays
+                for video in regularVideos {
+                    print("VideoFeedViewModel: Processing regular video: \(video.stableId)")
+                    if let videoStats = stats[video.statsDocumentId] {
+                        let views = videoStats["views"] as? Int ?? 0
+                        print("VideoFeedViewModel: Found stats for \(video.stableId) - views: \(views)")
+                        
+                        // Update in main videos array
+                        if let index = self.videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                            print("VideoFeedViewModel: Updating main array at index \(index)")
+                            self.videos[index].views = views
+                        } else {
+                            print("VideoFeedViewModel: Video not found in main array")
+                        }
+                        
+                        // Update in search results array
+                        if let index = self.searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                            print("VideoFeedViewModel: Updating search results at index \(index)")
+                            self.searchResults[index].views = views
+                        } else {
+                            print("VideoFeedViewModel: Video not found in search results")
+                        }
+                    } else {
+                        print("VideoFeedViewModel: No stats found for regular video: \(video.stableId)")
+                    }
+                }
+            } catch {
+                print("VideoFeedViewModel: Error fetching regular stats: \(error)")
+                print("VideoFeedViewModel: Full error details: \(error)")
+            }
+        }
+        
+        print("VideoFeedViewModel: -------- Stats Fetch Complete --------")
+        print("VideoFeedViewModel: Final video array views: \(self.videos.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
+        print("VideoFeedViewModel: Final search results views: \(self.searchResults.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
+    }
+    
     func loadInitialVideos() async {
         isLoading = true
         do {
@@ -48,10 +161,12 @@ class VideoFeedViewModel: ObservableObject {
             }
             
             lastDocument = snapshot.documents.last
-            isLoading = false
             
-            // Fetch creators for these videos
+            // Fetch creators and stats
             await fetchCreators(for: videos)
+            await fetchVideoStats(for: videos)
+            
+            isLoading = false
         } catch {
             self.error = error
             isLoading = false
@@ -75,10 +190,12 @@ class VideoFeedViewModel: ObservableObject {
             
             videos.append(contentsOf: newVideos)
             lastDocument = snapshot.documents.last
-            isLoading = false
             
-            // Fetch creators for new videos
+            // Fetch creators and stats for new videos
             await fetchCreators(for: newVideos)
+            await fetchVideoStats(for: newVideos)
+            
+            isLoading = false
         } catch {
             self.error = error
             isLoading = false
@@ -135,22 +252,46 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func updateVideoStats(video: Video) async throws {
-        print("Updating video stats for video: \(video.stableId)")
+        print("VideoFeedViewModel: Starting stats update for video: \(video.stableId)")
+        print("VideoFeedViewModel: Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
+        print("VideoFeedViewModel: Stats document ID: \(video.statsDocumentId)")
+        
         let db = Firestore.firestore()
-        let statsRef = db.collection(video.isArchiveVideo ? "archive_video_stats" : "video_stats").document(video.statsDocumentId)
+        let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
+        let statsRef = db.collection(collectionName).document(video.statsDocumentId)
+        
+        print("VideoFeedViewModel: Using collection: \(collectionName)")
         
         do {
             // Try to get the document first
+            print("VideoFeedViewModel: Fetching existing stats document")
             let docSnapshot = try await statsRef.getDocument()
             
             if docSnapshot.exists {
+                print("VideoFeedViewModel: Existing stats document found, updating view count")
                 // Document exists, update it
                 try await statsRef.updateData([
                     "views": FieldValue.increment(Int64(1)),
                     "updatedAt": FieldValue.serverTimestamp()
                 ])
-                print("Successfully updated stats for video: \(video.stableId)")
+                
+                // Get the updated document to sync local state
+                let updatedDoc = try await statsRef.getDocument()
+                let updatedData = updatedDoc.data() ?? [:]
+                let updatedViews = updatedData["views"] as? Int ?? 0
+                
+                // Update local video objects
+                if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                    videos[index].views = updatedViews
+                }
+                if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                    searchResults[index].views = updatedViews
+                }
+                
+                print("VideoFeedViewModel: Successfully updated stats for video: \(video.stableId)")
+                print("VideoFeedViewModel: Current document data: \(updatedData)")
             } else {
+                print("VideoFeedViewModel: No existing stats document found, creating new one")
                 // Document doesn't exist, create it with initial stats
                 try await statsRef.setData([
                     "views": 1,
@@ -158,10 +299,20 @@ class VideoFeedViewModel: ObservableObject {
                     "createdAt": FieldValue.serverTimestamp(),
                     "updatedAt": FieldValue.serverTimestamp()
                 ])
-                print("Created initial stats document for video: \(video.stableId)")
+                
+                // Update local video objects with initial view count of 1
+                if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
+                    videos[index].views = 1
+                }
+                if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
+                    searchResults[index].views = 1
+                }
+                
+                print("VideoFeedViewModel: Created initial stats document for video: \(video.stableId)")
             }
         } catch {
-            print("Error updating video stats: \(error.localizedDescription)")
+            print("VideoFeedViewModel: Error updating video stats: \(error.localizedDescription)")
+            print("VideoFeedViewModel: Full error details: \(error)")
             throw error
         }
     }
@@ -191,6 +342,9 @@ class VideoFeedViewModel: ObservableObject {
             if !archiveResults.isEmpty {
                 videoCreators["archive_user"] = archiveUser
             }
+            
+            // Fetch stats for all videos
+            await fetchVideoStats(for: searchResults)
             
         } catch {
             searchError = error

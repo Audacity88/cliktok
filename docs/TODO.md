@@ -23,8 +23,11 @@
   - [ ] Add conversation memory for context
   - [ ] Add personality to AI responses
   - [ ] Add video categorization
+  - [ ] Subtitles + translation
 
 ## UI/UX Improvements
+- [ ] Horizontal view
+- [ ] 2x speed
 - [ ] Add loading animations for terminal
 - [ ] Implement proper keyboard handling
 - [ ] Add terminal customization options

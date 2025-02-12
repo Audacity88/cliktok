@@ -33,7 +33,7 @@ class TipViewModel: ObservableObject {
     
     private let db = Firestore.firestore()
     private var hasInitialized = false
-    private let stripeService = StripeService.shared
+    private lazy var stripeService = StripeService.shared
     
     let tipAmounts = [1.00, 5.00, 10.00, 20.00]
     

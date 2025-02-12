@@ -53,6 +53,15 @@ service cloud.firestore {
       // Allow creating and updating view counts without auth
       allow create, update: if true;
     }
+
+    // Video stats collection
+    match /video_stats/{videoId} {
+      // Allow reading stats to anyone
+      allow read: if true;
+      
+      // Allow creating and updating view counts without auth
+      allow create, update: if true;
+    }
     
     // Allow any operation in development mode
     match /{document=**} {
