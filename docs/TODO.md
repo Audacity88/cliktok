@@ -2,7 +2,9 @@
 
 ## High Priority
 - [ ] Add age-dating functionality for videos in Submissions feed
-- [ ] Make tips and views persist on archive videos
+- [ ] Make tips and views persist on archive videos results
+- [ ] Allow persisting preferences
+- [ ] Predict your rating on search results
 - [ ] Complete terminal interface integration
   - [ ] Add video preview capability in terminal responses
   - [ ] Implement direct video playback from terminal
@@ -16,7 +18,7 @@
 - [ ] Views
   - [ ] Add my tipped videos
   - [ ] Home/collections
-
+  - [ ] Swipe up/down through search
 ## Features
 - [ ] Terminal Commands
   - [ ] Add 'watch' command to directly play videos

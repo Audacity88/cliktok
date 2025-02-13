@@ -62,10 +62,13 @@ class AISearchViewModel: ObservableObject {
             let results = try await archiveAPI.fetchCollectionItems(
                 query: queryString,
                 offset: 0,
-                limit: 5  // Fetch 5 results
+                limit: 10
             )
             
-            print("Found \(results.count) initial results")
+            // Remove duplicates by identifier
+            let uniqueResults = Array(Dictionary(grouping: results, by: { $0.identifier }).values.map { $0[0] }.prefix(10))
+            
+            print("Found \(uniqueResults.count) unique initial results")
             
             // Only proceed if we haven't been cancelled
             guard currentTaskId == taskId else {
@@ -73,9 +76,27 @@ class AISearchViewModel: ObservableObject {
                 return
             }
             
-            // Process all results
-            if !results.isEmpty {
-                let rankedResults = try await aiService.searchAndRankVideos(results, query: searchQuery, taskId: taskId)
+            // Show initial results one by one through callback with delay
+            for (index, video) in uniqueResults.enumerated() {
+                print("Showing initial result [\(index + 1)/\(uniqueResults.count)]: \(video.identifier)")
+                
+                // Add a small delay between showing each result (200ms)
+                if index > 0 {
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                }
+                
+                // Show the result on the main actor
+                await MainActor.run {
+                    callback?(video)
+                }
+            }
+            
+            // Process results with AI if we have any
+            if !uniqueResults.isEmpty {
+                // Add a delay to ensure initial results are displayed
+                try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
+                
+                let rankedResults = try await aiService.searchAndRankVideos(uniqueResults, query: searchQuery, taskId: taskId)
                 
                 // Check again for cancellation
                 guard currentTaskId == taskId else {
@@ -83,19 +104,34 @@ class AISearchViewModel: ObservableObject {
                     return
                 }
                 
-                // Update searchResults
+                // Store ranked results and show them
                 await MainActor.run {
                     searchResults = rankedResults
-                }
-                
-                // Notify about each result
-                for video in rankedResults {
-                    print("Processing video: \(video.identifier)")
-                    if let callback = callback {
-                        print("Calling onResultFound callback for \(video.identifier)")
-                        await MainActor.run {
-                            callback(video)
+                    
+                    // Print debug info about ranked results
+                    print("\n=== FINAL RANKED RESULTS ===")
+                    for (index, video) in rankedResults.enumerated() {
+                        print("[\(index + 1)] \(video.identifier)")
+                    }
+                    print("=========================\n")
+                    
+                    // Clear previous results by sending a special signal
+                    callback?(ArchiveVideo(identifier: "CLEAR_RESULTS", title: "", videoURL: "", thumbnailURL: "", description: ""))
+                    
+                    // Show ranked results with delay
+                    Task {
+                        print("\nDisplaying ranked results:")
+                        for (index, video) in rankedResults.enumerated() {
+                            if index > 0 {
+                                try? await Task.sleep(nanoseconds: 200_000_000)
+                            }
+                            print("Showing ranked result [\(index + 1)/\(rankedResults.count)]: \(video.identifier)")
+                            callback?(video)
                         }
+                        
+                        // Send end signal after all ranked results are shown
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                        callback?(ArchiveVideo(identifier: "END_RANKED_RESULTS", title: "", videoURL: "", thumbnailURL: "", description: ""))
                     }
                 }
             } else {

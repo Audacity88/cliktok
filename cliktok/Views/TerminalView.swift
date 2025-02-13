@@ -176,44 +176,63 @@ struct TerminalView: View {
     @State private var isProcessing = false
     @State private var showCursor = true
     @State private var showMenu = false
+    @State private var showVideoPlayer = false
+    @State private var selectedVideo: Video?
     @StateObject private var aiService = AISearchViewModel()
     @StateObject private var tipViewModel = TipViewModel.shared
+    @StateObject private var feedViewModel = VideoFeedViewModel()
+    @StateObject private var archiveViewModel = ArchiveVideoViewModel()
     @Environment(\.dismiss) private var dismiss
     
     let timer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
     
     var body: some View {
-        ZStack {
-            Color.black.edgesIgnoringSafeArea(.all)
-            
-            VStack(spacing: 0) {
-                RetroStatusBar()
+        NavigationView {
+            ZStack {
+                Color.black.edgesIgnoringSafeArea(.all)
                 
-                TerminalContentView(
-                    conversation: $conversation,
-                    userInput: $userInput,
-                    isProcessing: $isProcessing,
-                    showCursor: $showCursor,
-                    processCommand: processCommand
-                )
-            }
-            
-            if showMenu {
-                MenuOverlayView(showMenu: $showMenu)
-            }
-        }
-        .onReceive(timer) { _ in
-            showCursor.toggle()
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onEnded { _ in
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                VStack(spacing: 0) {
+                    RetroStatusBar()
+                    
+                    TerminalContentView(
+                        conversation: $conversation,
+                        userInput: $userInput,
+                        isProcessing: $isProcessing,
+                        showCursor: $showCursor,
+                        processCommand: processCommand
+                    )
                 }
-        )
-        .task {
-            await tipViewModel.loadBalance()
-            await tipViewModel.loadTipHistory()
+                
+                if showMenu {
+                    MenuOverlayView(showMenu: $showMenu)
+                }
+            }
+            .onReceive(timer) { _ in
+                showCursor.toggle()
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { _ in
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+            )
+            .task {
+                await tipViewModel.loadBalance()
+                await tipViewModel.loadTipHistory()
+            }
+            .sheet(isPresented: $showVideoPlayer) {
+                if let video = selectedVideo {
+                    VideoPlayerView(
+                        video: video,
+                        showBackButton: true,
+                        clearSearchOnDismiss: .constant(false),
+                        isVisible: .constant(true),
+                        showCreator: true
+                    )
+                    .environmentObject(feedViewModel)
+                    .environmentObject(tipViewModel)
+                }
+            }
         }
     }
     
@@ -244,6 +263,27 @@ struct TerminalView: View {
         case let cmd where cmd.hasPrefix("search "):
             let query = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
             handleSearch(query: query)
+        case "play 0":
+            // Play test pattern video
+            let testVideo = Video(
+                id: nil,
+                archiveIdentifier: "big_buck_bunny",
+                userID: "archive_user",
+                videoURL: "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
+                thumbnailURL: nil,
+                caption: "Big Buck Bunny",
+                description: "Big Buck Bunny - Classic open source animation",
+                hashtags: ["test"],
+                createdAt: Date(),
+                likes: 0,
+                views: 0
+            )
+            selectedVideo = testVideo
+            showVideoPlayer = true
+            conversation.append((role: "system", content: "Playing test video: Big Buck Bunny"))
+            isProcessing = false
+        case let cmd where cmd.hasPrefix("play "):
+            handlePlayCommand(cmd)
         case let cmd where cmd.hasPrefix("view "):
             handleViewCommand(cmd)
         case "trending":
@@ -253,8 +293,10 @@ struct TerminalView: View {
         case "back":
             conversation.append((role: "system", content: "Returned to previous view."))
             isProcessing = false
+        case "more":
+            let currentBatchStart = (aiService.searchResults.count / 5) * 5
+            showResultsBatch(startIndex: currentBatchStart)
         default:
-            // No longer process as AI query by default
             conversation.append((role: "system", content: "Unknown command. Type 'help' for available commands."))
             isProcessing = false
         }
@@ -272,6 +314,7 @@ struct TerminalView: View {
         - search [query]: Search for videos
         - trending: Show trending videos
         - random: Show random videos
+        - play [number]: Play video from search results
         
         Type 'search' or 'wallet' for more specific help.
         """
@@ -312,43 +355,44 @@ struct TerminalView: View {
             // Track displayed results
             var displayedResults = Set<String>()
             var headerShown = false
-            var searchComplete = false
+            var allResults: [ArchiveVideo] = []
             
-            // Create callback
+            // Show initial results one by one through callback
             let searchCallback: (ArchiveVideo) -> Void = { video in
                 print("Callback received video: \(video.identifier)")
                 Task { @MainActor in
-                    if !displayedResults.contains(video.identifier) {
-                        displayedResults.insert(video.identifier)
-                        
-                        // Show header if this is the first result
-                        if !headerShown {
-                            self.conversation.append((role: "system", content: """
-                            ╔═══ SEARCH RESULTS ═══╗
-                            Found matching videos:
-                            ═══════════════════════
-                            """))
-                            headerShown = true
-                        }
-                        
-                        // Add result
+                    if video.identifier == "CLEAR_RESULTS" {
+                        // Add a separator between initial and ranked results
                         self.conversation.append((role: "system", content: """
-                        [\(displayedResults.count)] \(video.title)
+                        
+                        ═══════════════════════
+                        Ranking results by relevance...
+                        ═══════════════════════
+                        
+                        ╔═══ RANKED RESULTS ═══╗
+                        Most relevant matches:
+                        ═══════════════════════
+                        """))
+                        // Reset the counter for ranked results
+                        displayedResults.removeAll()
+                    } else if video.identifier == "END_RANKED_RESULTS" {
+                        // Add commands after all ranked results are shown
+                        self.conversation.append((role: "system", content: """
+                        
+                        ═══════════════════════
+                        Available Commands:
+                        - view [number]: View video details (e.g., 'view 1')
+                        - play [number]: Play video
+                        - search [query]: New search
+                        """))
+                    } else {
+                        self.conversation.append((role: "system", content: """
+                        [\(displayedResults.count + 1)] \(video.title)
                         ├─ ID: \(video.identifier)
                         └─ Description: \(video.description?.prefix(100) ?? "No description")...
                         """))
+                        displayedResults.insert(video.identifier)
                         print("Added video to conversation")
-                        
-                        // Show footer after each result if search is complete
-                        if searchComplete && displayedResults.count == aiService.searchResults.count {
-                            self.conversation.append((role: "system", content: """
-                            ═══════════════════════
-                            Available Commands:
-                            - view [number]: View video details (e.g., 'view 1')
-                            - play [number]: Play video
-                            - search [query]: New search
-                            """))
-                        }
                     }
                 }
             }
@@ -360,7 +404,6 @@ struct TerminalView: View {
             
             aiService.searchQuery = query
             await aiService.performSearch()
-            searchComplete = true
             
             // Clear callback
             aiService.onResultFound = nil
@@ -368,12 +411,88 @@ struct TerminalView: View {
             // Check for error message
             if let error = aiService.errorMessage {
                 conversation.append((role: "system", content: error))
+                isProcessing = false
+                return
             } else if displayedResults.isEmpty && !aiService.isLoading {
                 conversation.append((role: "system", content: "No results found for: \(query)"))
+                isProcessing = false
+                return
+            }
+            
+            // If we have results, process them with AI
+            if !allResults.isEmpty {
+                conversation.append((role: "system", content: """
+                
+                Found \(allResults.count) videos. Ranking by relevance...
+                """))
+                await processResultsWithAI(allResults, query: query)
             }
             
             isProcessing = false
         }
+    }
+    
+    private func processResultsWithAI(_ videos: [ArchiveVideo], query: String) async {
+        // Use AISearchService to rank results
+        do {
+            let taskId = UUID()
+            let rankedResults = try await AISearchService.shared.searchAndRankVideos(videos, query: query, taskId: taskId)
+            
+            // Update search results for play/view commands
+            aiService.searchResults = rankedResults
+            
+            // Show first batch of results
+            showResultsBatch(startIndex: 0)
+            
+        } catch let error as AISearchError {
+            conversation.append((role: "system", content: "AI Ranking Error: \(error.localizedDescription)"))
+        } catch {
+            conversation.append((role: "system", content: "Unexpected error during ranking: \(error.localizedDescription)"))
+        }
+    }
+    
+    private func showResultsBatch(startIndex: Int) {
+        guard startIndex < aiService.searchResults.count else {
+            conversation.append((role: "system", content: "No more results to show."))
+            return
+        }
+        
+        let endIndex = min(startIndex + 5, aiService.searchResults.count)
+        let isFirstBatch = startIndex == 0
+        let hasMoreResults = endIndex < aiService.searchResults.count
+        
+        // Show header
+        conversation.append((role: "system", content: """
+        
+        ╔═══ RANKED RESULTS (\(startIndex + 1)-\(endIndex) of \(aiService.searchResults.count)) ═══╗
+        Most relevant matches:
+        ═══════════════════════
+        """))
+        
+        // Display results batch
+        for index in startIndex..<endIndex {
+            let video = aiService.searchResults[index]
+            conversation.append((role: "system", content: """
+            [\(index + 1)] \(video.title)
+            ├─ ID: \(video.identifier)
+            └─ Description: \(video.description?.prefix(100) ?? "No description")...
+            """))
+        }
+        
+        // Show footer with appropriate commands
+        var commandsText = """
+        ═══════════════════════
+        Available Commands:
+        - view [number]: View video details (e.g., 'view 1')
+        - play [number]: Play video
+        - search [query]: New search
+        """
+        
+        if hasMoreResults {
+            commandsText += "\n- more: Show next 5 results"
+        }
+        
+        conversation.append((role: "system", content: commandsText))
     }
     
     private func handleViewCommand(_ command: String) {
@@ -529,6 +648,43 @@ struct TerminalView: View {
             
             isProcessing = false
         }
+    }
+    
+    private func handlePlayCommand(_ command: String) {
+        // Extract the number from the command
+        let parts = command.split(separator: " ")
+        guard parts.count == 2,
+              let number = Int(parts[1]),
+              number > 0,
+              number <= aiService.searchResults.count else {
+            conversation.append((role: "system", content: "Invalid play command. Usage: play [number]"))
+            isProcessing = false
+            return
+        }
+        
+        // Get the archive video
+        let archiveVideo = aiService.searchResults[number - 1]
+        
+        // Convert ArchiveVideo to Video
+        let video = Video(
+            id: nil,
+            archiveIdentifier: archiveVideo.identifier,
+            userID: "archive_user",
+            videoURL: archiveVideo.videoURL,
+            thumbnailURL: archiveVideo.thumbnailURL,
+            caption: archiveVideo.title,
+            description: archiveVideo.description,
+            hashtags: ["archive"],
+            createdAt: Date(),
+            likes: 0,
+            views: 0
+        )
+        
+        selectedVideo = video
+        showVideoPlayer = true
+        
+        conversation.append((role: "system", content: "Playing video: \(video.caption)"))
+        isProcessing = false
     }
     
     private func showWalletInfo() {
