@@ -69,11 +69,11 @@ class AISearchViewModel: ObservableObject {
             let results = try await archiveAPI.fetchCollectionItems(
                 query: queryString,
                 offset: 0,
-                limit: 5 // Use same value as AISearchService.MAX_SEARCH_RESULTS
+                limit: 20 // Match AISearchService.MAX_SEARCH_RESULTS
             )
             
             // Remove duplicates by identifier
-            let uniqueResults = Array(Dictionary(grouping: results, by: { $0.identifier }).values.map { $0[0] }.prefix(5))
+            let uniqueResults = Array(Dictionary(grouping: results, by: { $0.identifier }).values.map { $0[0] }.prefix(20))
             
             print("Found \(uniqueResults.count) unique initial results")
             

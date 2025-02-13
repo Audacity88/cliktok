@@ -31,7 +31,7 @@ actor AISearchService {
     private var activeTasks: Set<UUID> = []
     
     // Maximum number of search results to process and display
-    private let MAX_SEARCH_RESULTS = 5
+    private let MAX_SEARCH_RESULTS = 20
     
     private init() {}
     
@@ -86,97 +86,110 @@ actor AISearchService {
         Higher numbers mean more relevant.
         """
         
-        // Prepare video information with numbering for clearer context
-        let videosInfo = videos.prefix(MAX_SEARCH_RESULTS).enumerated().map { index, video in
+        // Process videos in smaller batches to stay within token limits
+        let BATCH_SIZE = 8 // Process 8 videos at a time to stay well under token limits
+        let videosToRank = Array(videos.prefix(MAX_SEARCH_RESULTS))
+        var allRankedVideos: [(video: ArchiveVideo, score: Double)] = []
+        
+        // Process each batch
+        for batchStart in stride(from: 0, to: videosToRank.count, by: BATCH_SIZE) {
+            let batchEnd = min(batchStart + BATCH_SIZE, videosToRank.count)
+            let batch = Array(videosToRank[batchStart..<batchEnd])
+            
+            print("Processing batch \(batchStart/BATCH_SIZE + 1) with \(batch.count) videos")
+            
+            let batchInfo = batch.enumerated().map { index, video in
+                """
+                [\(index + 1)]
+                Title: \(video.title)
+                Description: \(video.description?.cleaningHTMLTags() ?? "No description")
+                ---
+                """
+            }.joined(separator: "\n")
+            
+            let userContent = """
+            Query: "\(query)"
+            
+            Rate these \(batch.count) videos (0-100):
+            \(batchInfo)
+            
+            Return exactly \(batch.count) comma-separated numbers, one for each video.
             """
-            [\(index + 1)]
-            Title: \(video.title)
-            Description: \(video.description?.cleaningHTMLTags() ?? "No description")
-            ---
-            """
-        }.joined(separator: "\n")
-        
-        let userContent = """
-        Query: "\(query)"
-        
-        Rate these videos (0-100):
-        \(videosInfo)
-        
-        Return only comma-separated numbers.
-        """
-        
-        print("Prepared ranking prompt with \(videos.count) videos")
-        
-        do {
-            // Create chat messages without optionals
-            guard let systemMessage = try? ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt),
-                  let userMessage = try? ChatQuery.ChatCompletionMessageParam(role: .user, content: userContent) else {
-                print("Failed to create chat messages")
-                throw AISearchError.rankingFailed
-            }
             
-            let chatQuery = ChatQuery(
-                messages: [systemMessage, userMessage],
-                model: .gpt3_5Turbo
-            )
-            
-            print("Sending ranking request to GPT")
-            let result = try await client.chats(query: chatQuery)
-            
-            guard case let .string(content) = result.choices.first?.message.content else {
-                print("Error: No content in GPT response")
-                throw AISearchError.rankingFailed
-            }
-            
-            print("Received GPT response: \(content)")
-            
-            // Clean and parse the response
-            let cleanContent = content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-            let scoreStrings = cleanContent.split(separator: ",")
-            
-            print("Split response into \(scoreStrings.count) parts")
-            
-            let scores = scoreStrings.compactMap { substring -> Double? in
-                let trimmed = substring.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                guard let score = Double(trimmed) else {
-                    print("Failed to parse score: \(trimmed)")
-                    return nil
+            do {
+                guard let systemMessage = try? ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt),
+                      let userMessage = try? ChatQuery.ChatCompletionMessageParam(role: .user, content: userContent) else {
+                    print("Failed to create chat messages")
+                    throw AISearchError.rankingFailed
                 }
-                guard score >= 0 && score <= 100 else {
-                    print("Score out of range: \(score)")
-                    return nil
+                
+                let chatQuery = ChatQuery(
+                    messages: [systemMessage, userMessage],
+                    model: .gpt3_5Turbo
+                )
+                
+                print("Sending ranking request to GPT for batch \(batchStart/BATCH_SIZE + 1)")
+                let result = try await client.chats(query: chatQuery)
+                
+                guard case let .string(content) = result.choices.first?.message.content else {
+                    print("Error: No content in GPT response")
+                    throw AISearchError.rankingFailed
                 }
-                return score
-            }
-            
-            print("Successfully parsed \(scores.count) scores")
-            
-            guard scores.count == videos.prefix(MAX_SEARCH_RESULTS).count else {
-                print("Error: Score count (\(scores.count)) doesn't match video count (\(videos.prefix(MAX_SEARCH_RESULTS).count))")
+                
+                print("Received GPT response: \(content)")
+                
+                // Clean and parse the response
+                let cleanContent = content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                let scoreStrings = cleanContent.split(separator: ",")
+                
+                print("Split response into \(scoreStrings.count) parts")
+                
+                let scores = scoreStrings.compactMap { substring -> Double? in
+                    let trimmed = substring.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                    guard let score = Double(trimmed) else {
+                        print("Failed to parse score: \(trimmed)")
+                        return nil
+                    }
+                    guard score >= 0 && score <= 100 else {
+                        print("Score out of range: \(score)")
+                        return nil
+                    }
+                    return score
+                }
+                
+                print("Successfully parsed \(scores.count) scores")
+                
+                // Verify we have the correct number of scores for this batch
+                guard scores.count == batch.count else {
+                    print("Error: Score count (\(scores.count)) doesn't match batch size (\(batch.count))")
+                    throw AISearchError.rankingFailed
+                }
+                
+                // Add batch results to overall results
+                let batchResults = Array(zip(batch, scores))
+                allRankedVideos.append(contentsOf: batchResults)
+                
+                print("Added batch \(batchStart/BATCH_SIZE + 1) results")
+                
+            } catch {
+                print("Error processing batch \(batchStart/BATCH_SIZE + 1): \(error)")
                 throw AISearchError.rankingFailed
             }
-            
-            // Combine videos with scores and sort
-            let rankedVideos = Array(zip(videos.prefix(MAX_SEARCH_RESULTS), scores))
-                .sorted { $0.1 > $1.1 }
-                .map { $0.0 }
-            
-            print("Successfully ranked \(rankedVideos.count) videos")
-            
-            // Print rankings for debugging
-            for (index, video) in rankedVideos.enumerated() {
-                print("Rank \(index + 1): \(video.title) (Score: \(scores[index]))")
-            }
-            
-            return rankedVideos
-            
-        } catch let error as AISearchError {
-            print("AISearchError during ranking: \(error.localizedDescription)")
-            throw error
-        } catch {
-            print("Unexpected error during ranking: \(error.localizedDescription)")
-            throw AISearchError.rankingFailed
         }
+        
+        // Sort all results by score and return videos
+        let rankedVideos = allRankedVideos
+            .sorted { $0.score > $1.score }
+            .map { $0.video }
+        
+        print("Successfully ranked all \(rankedVideos.count) videos")
+        
+        // Print final rankings for debugging
+        for (index, result) in allRankedVideos.sorted(by: { $0.score > $1.score }).enumerated() {
+            print("Rank \(index + 1): \(result.video.title) (Score: \(result.score))")
+        }
+        
+        return rankedVideos
     }
     
     /// Parse scores from GPT response

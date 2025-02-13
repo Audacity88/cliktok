@@ -1232,6 +1232,8 @@ struct VideoPlayerView: View {
             .edgesIgnoringSafeArea(.all)
             .statusBar(hidden: orientation.isLandscape)  // Hide system status bar in landscape
         }
+        .ignoresSafeArea(.container, edges: .all)  // Add this to ensure full-screen coverage
+        .statusBarHidden(orientation.isLandscape)   // Add explicit status bar hiding
         .onAppear {
             logger.debug("VideoPlayerView appeared")
             setupVideo()
