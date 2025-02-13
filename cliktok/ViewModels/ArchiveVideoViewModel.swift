@@ -18,6 +18,7 @@ class ArchiveVideoViewModel: ObservableObject {
     private var prefetchTasks: [String: Task<Void, Never>] = [:]
     private var lastLoadDirection: LoadDirection = .forward
     private var videoCache: [String: [ArchiveVideo]] = [:]
+    private var preloadTask: Task<Void, Never>?
     
     enum LoadDirection {
         case forward
@@ -29,44 +30,16 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     private func addInitialCollections() {
-        // Test Videos Collection
-        let testVideos = ArchiveCollection(
-            id: "test_videos",
-            title: "Test Videos",
-            description: "Sample videos for testing",
-            videos: [
-                ArchiveVideo(
-                    identifier: "test_pattern",
-                    title: "Test Pattern",
-                    videoURL: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-                    thumbnailURL: nil,
-                    description: "Test video for streaming"
-                ),
-                ArchiveVideo(
-                    identifier: "big_buck_bunny",
-                    title: "Big Buck Bunny",
-                    videoURL: "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
-                    thumbnailURL: nil,
-                    description: "Big Buck Bunny - Classic open source animation"
-                ),
-                ArchiveVideo(
-                    identifier: "elephants_dream",
-                    title: "Elephants Dream",
-                    videoURL: "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4",
-                    thumbnailURL: nil,
-                    description: "Elephants Dream - First Blender Open Movie"
-                )
-            ]
-        )
-        
         // Add Internet Archive Collections
         let archiveCollections = [
             (id: "demolitionkitchenvideo", title: "Demolition Kitchen", description: "Videos from the Demolition Kitchen collection"),
             (id: "prelinger", title: "Prelinger Archives", description: "Historical films from the Prelinger Archives"),
             (id: "artsandmusicvideos", title: "Arts & Music", description: "A collection of arts and music videos from the Internet Archive"),
-            (id: "computerchromevideos", title: "Computer Chronicles", description: "Classic TV series about the rise of the computer industry"),
             (id: "classic_tv", title: "Classic TV", description: "Classic television shows and commercials"),
-            (id: "opensource_movies", title: "Open Source Movies", description: "Community contributed open source films and animations")
+            (id: "opensource_movies", title: "Open Source Movies", description: "Community contributed open source films"),
+            (id: "sports", title: "Sports Archive", description: "Historical sports footage and memorable sporting moments"),
+            (id: "movie_trailers", title: "Movie Trailers", description: "Collection of classic and contemporary movie trailers"),
+            (id: "newsandpublicaffairs", title: "News & Public Affairs", description: "Historical news footage and public affairs programming")
         ]
         
         let archiveCollectionModels = archiveCollections.map { collection in
@@ -78,8 +51,8 @@ class ArchiveVideoViewModel: ObservableObject {
             )
         }
         
-        collections = [testVideos] + archiveCollectionModels
-        selectedCollection = testVideos
+        collections = archiveCollectionModels
+        selectedCollection = archiveCollectionModels.first
     }
     
     private func prefetchCollections(_ collections: [ArchiveCollection]) async {
@@ -316,5 +289,67 @@ class ArchiveVideoViewModel: ObservableObject {
                 print("Error loading more videos: \(error)")
             }
         }
+    }
+    
+    func preloadCollections() {
+        // Cancel any existing preload task
+        preloadTask?.cancel()
+        
+        preloadTask = Task {
+            // First, preload all collection thumbnails
+            let thumbnailURLs = collections.compactMap { collection in
+                URL(string: InternetArchiveAPI.getThumbnailURL(identifier: collection.id).absoluteString)
+            }
+            await ImageCache.shared.prefetchImages(thumbnailURLs)
+            
+            // Then preload first video from each collection
+            for collection in collections {
+                guard !Task.isCancelled else { break }
+                
+                do {
+                    let videos = try await api.fetchCollectionItems(
+                        identifier: collection.id,
+                        offset: 0,
+                        limit: 1
+                    )
+                    
+                    // Cache the video metadata
+                    if let index = self.collections.firstIndex(where: { $0.id == collection.id }) {
+                        await MainActor.run {
+                            var updatedCollection = self.collections[index]
+                            updatedCollection.videos = videos
+                            self.collections[index] = updatedCollection
+                            
+                            // Mark range as loaded
+                            var ranges = self.loadedRanges[collection.id] ?? Set<Range<Int>>()
+                            ranges.insert(0..<1)
+                            self.loadedRanges[collection.id] = ranges
+                        }
+                        
+                        // Preload video thumbnails
+                        if let videoThumbnailURL = URL(string: videos.first?.thumbnailURL ?? "") {
+                            await ImageCache.shared.prefetchImages([videoThumbnailURL])
+                        }
+                    }
+                } catch {
+                    print("Error preloading collection \(collection.id): \(error)")
+                }
+                
+                // Add a small delay between collections to avoid overwhelming the API
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
+            }
+        }
+    }
+    
+    // Make this nonisolated so it can be called from deinit
+    nonisolated func cancelPreloading() {
+        Task { @MainActor in
+            preloadTask?.cancel()
+            preloadTask = nil
+        }
+    }
+    
+    deinit {
+        cancelPreloading()
     }
 }

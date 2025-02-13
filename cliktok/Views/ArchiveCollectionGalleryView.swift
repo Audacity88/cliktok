@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ArchiveCollectionGalleryView: View {
     @EnvironmentObject var viewModel: ArchiveVideoViewModel
@@ -27,7 +28,7 @@ struct ArchiveCollectionGalleryView: View {
                 }
                 .padding()
             }
-            .navigationTitle("Archive Collections")
+            .navigationTitle("Collections")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -35,13 +36,6 @@ struct ArchiveCollectionGalleryView: View {
                         dismiss()
                     }
                 }
-            }
-            .task {
-                // Prefetch all collection thumbnails
-                let urls = viewModel.collections.compactMap { collection in
-                    collection.thumbnailURL.flatMap { URL(string: $0) }
-                }
-                ImageCache.shared.prefetchImages(urls)
             }
         }
     }
@@ -58,8 +52,9 @@ struct CollectionCard: View {
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(height: 120)
+                        .frame(width: UIScreen.main.bounds.width/2 - 20, height: 120)
                         .clipped()
+                        .contentShape(Rectangle())
                 } placeholder: {
                     Rectangle()
                         .fill(Color.gray.opacity(0.3))

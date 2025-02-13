@@ -131,7 +131,7 @@ private struct MenuOverlayView: View {
             
             VStack(spacing: 20) {
                 MenuButton(title: "SUBMISSIONS", icon: "house.fill", action: { showMenu = false })
-                MenuButton(title: "ARCHIVE", icon: "tv", action: { showMenu = false })
+                MenuButton(title: "COLLECTIONS", icon: "tv", action: { showMenu = false })
                 MenuButton(title: "SEARCH", icon: "magnifyingglass.circle.fill", action: { showMenu = false })
                 MenuButton(title: "WALLET", icon: "dollarsign.circle.fill", action: { showMenu = false })
                 MenuButton(title: "UPLOAD", icon: "plus.square.fill", action: { showMenu = false })
@@ -193,6 +193,8 @@ struct TerminalView: View {
                 
                 VStack(spacing: 0) {
                     RetroStatusBar()
+                        .frame(height: 44)
+                        .ignoresSafeArea(.container, edges: .top)
                     
                     TerminalContentView(
                         conversation: $conversation,
@@ -202,6 +204,7 @@ struct TerminalView: View {
                         processCommand: processCommand
                     )
                 }
+                .edgesIgnoringSafeArea(.top)
                 
                 if showMenu {
                     MenuOverlayView(showMenu: $showMenu)
@@ -577,8 +580,33 @@ struct TerminalView: View {
                 }
             }
             
-            // Start the search
-            await aiService.performSearch()
+            // Start the trending search with specific parameters
+            aiService.searchQuery = ""  // Clear any existing query
+            do {
+                // Get trending videos with simpler, more reliable query
+                let trendingQuery = """
+                mediatype:(movies OR movingimage) \
+                -collection:test_videos \
+                -collection:stream_only \
+                format:(mp4 OR h.264) \
+                sort[]=downloads desc \
+                sort[]=week desc
+                """
+                let results = try await InternetArchiveAPI.shared.fetchCollectionItems(
+                    query: trendingQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trendingQuery,
+                    offset: 0,
+                    limit: 10
+                )
+                
+                // Process and display results
+                for video in results {
+                    await MainActor.run {
+                        aiService.onResultFound?(video)
+                    }
+                }
+            } catch {
+                conversation.append((role: "system", content: "Error finding trending videos: \(error.localizedDescription)"))
+            }
             
             // Clear the callback
             aiService.onResultFound = nil
@@ -637,8 +665,30 @@ struct TerminalView: View {
                 }
             }
             
-            // Start the search
-            await aiService.performSearch()
+            // Get random videos directly without using search
+            do {
+                // Use a random sort and basic video filters
+                let randomQuery = """
+                (mediatype:movies OR mediatype:movingimage) AND \
+                -collection:test_videos AND \
+                (format:mp4 OR format:h.264 OR format:512kb)
+                """
+                
+                let results = try await InternetArchiveAPI.shared.fetchCollectionItems(
+                    query: randomQuery,
+                    offset: Int.random(in: 0...100),  // Random offset for variety
+                    limit: 10
+                )
+                
+                // Process and display results
+                for video in results {
+                    await MainActor.run {
+                        aiService.onResultFound?(video)
+                    }
+                }
+            } catch {
+                conversation.append((role: "system", content: "Error finding random videos: \(error.localizedDescription)"))
+            }
             
             // Clear the callback
             aiService.onResultFound = nil

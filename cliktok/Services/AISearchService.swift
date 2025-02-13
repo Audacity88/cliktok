@@ -30,8 +30,9 @@ actor AISearchService {
     static let shared = AISearchService()
     private var activeTasks: Set<UUID> = []
     
-    // Maximum number of search results to process and display
-    private let MAX_SEARCH_RESULTS = 20
+    // Constants
+    static let MAX_SEARCH_RESULTS = 10
+    static let MAX_TOKENS = 4096
     
     private init() {}
     
@@ -88,7 +89,7 @@ actor AISearchService {
         
         // Process videos in smaller batches to stay within token limits
         let BATCH_SIZE = 8 // Process 8 videos at a time to stay well under token limits
-        let videosToRank = Array(videos.prefix(MAX_SEARCH_RESULTS))
+        let videosToRank = Array(videos.prefix(AISearchService.MAX_SEARCH_RESULTS))
         var allRankedVideos: [(video: ArchiveVideo, score: Double)] = []
         
         // Process each batch

@@ -107,11 +107,33 @@ struct InternetArchiveMetadata: Codable {
 }
 
 struct ArchiveSearchResponse: Codable {
+    let responseHeader: ResponseHeader
     let response: SearchResponse
+    
+    struct ResponseHeader: Codable {
+        let status: Int
+        let QTime: Int
+        let params: SearchParams
+        
+        struct SearchParams: Codable {
+            let query: String
+            let qin: String
+            let fields: String
+            let wt: String
+            let sort: String?
+            let rows: String
+            let start: Int
+            
+            private enum CodingKeys: String, CodingKey {
+                case query, qin, fields = "fields", wt, sort, rows, start
+            }
+        }
+    }
     
     struct SearchResponse: Codable {
         let docs: [SearchDoc]
         let numFound: Int
+        let start: Int
     }
     
     struct SearchDoc: Codable {
@@ -119,6 +141,24 @@ struct ArchiveSearchResponse: Codable {
         let title: String?
         let description: String?
         let mediatype: String?
+    }
+}
+
+// Add error response structure
+struct ArchiveAPIError: Codable {
+    let error: String
+    let forensics: Forensics
+    
+    struct Forensics: Codable {
+        let timestamp: String
+        let message: String
+        let statusCode: Int
+        
+        private enum CodingKeys: String, CodingKey {
+            case timestamp
+            case message
+            case statusCode = "status_code"
+        }
     }
 }
 
@@ -140,11 +180,39 @@ extension InternetArchiveAPI {
         let (data, _) = try await URLSession.shared.data(from: url)
         let metadata = try JSONDecoder().decode(InternetArchiveMetadata.self, from: data)
         
+        // Known video extensions and formats
+        let validVideoExtensions = [".mp4", ".m4v", ".mov", ".avi", ".mkv"]
+        let validVideoFormats = ["h.264", "mpeg4", "quicktime", "matroska"]
+        
         // Look for video files in order of preference
         let videoFiles = metadata.files.filter { file in
             let name = file.name.lowercased()
-            return name.hasSuffix(".mp4") || name.hasSuffix(".m4v") || 
-                   name.hasSuffix(".mov") || name.contains("512kb")
+            let format = file.format?.lowercased() ?? ""
+            
+            // First check if it's a known non-video file
+            let nonVideoExtensions = [
+                ".mp3", ".ogg", ".wav", ".m4a", ".aac",  // Audio
+                ".srt", ".vtt",                          // Subtitles
+                ".gif", ".jpg", ".jpeg", ".png",         // Images
+                ".txt", ".nfo", ".xml", ".json",         // Text/Data
+                ".pdf", ".doc", ".docx",                 // Documents
+                ".sqlite", ".db", ".meta",               // Database/metadata
+                ".afpk", ".pkg",                         // Package files
+                ".zip", ".rar", ".7z"                    // Archives
+            ]
+            
+            if nonVideoExtensions.contains(where: { name.hasSuffix($0) }) {
+                return false
+            }
+            
+            // Then check if it's explicitly a video file
+            let isVideoByExtension = validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isVideoByFormat = validVideoFormats.contains(where: { format.contains($0) })
+            let isVideoByFormatField = format.contains("video")
+            let is512kbVideo = name.contains("512kb") && validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isComputerChronicles = name.contains(".cct.") || name.contains("_512kb") || name.contains("_256kb")
+            
+            return isVideoByExtension || isVideoByFormat || isVideoByFormatField || is512kbVideo || isComputerChronicles
         }
         
         // Sort by preference: 512kb.mp4 first, then other mp4s
@@ -180,13 +248,14 @@ extension InternetArchiveAPI {
         // Use the best matching file or fall back to default
         if let bestFile = sortedFiles.first {
             let videoURL = "https://archive.org/download/\(identifier)/\(bestFile.name)"
-            print("Found actual video URL: \(videoURL)")
             return videoURL
         }
         
-        // If no suitable files found, throw an error instead of using default URL
+        // If no suitable files found, throw an error with more context
+        let mediaType = metadata.metadata.mediatype ?? "unknown"
+        let errorMessage = "No suitable video file found for identifier: \(identifier) (Media Type: \(mediaType))"
         throw NSError(domain: "InternetArchive", code: 404, userInfo: [
-            NSLocalizedDescriptionKey: "No suitable video file found for identifier: \(identifier)"
+            NSLocalizedDescriptionKey: errorMessage
         ])
     }
     
@@ -197,6 +266,7 @@ extension InternetArchiveAPI {
 
 actor InternetArchiveAPI {
     static let shared = InternetArchiveAPI()
+    private let logger = Logger(component: "InternetArchiveAPI")
     
     // Cache for metadata to prevent repeated fetches
     private var metadataCache: [String: InternetArchiveMetadata] = [:]
@@ -207,161 +277,183 @@ actor InternetArchiveAPI {
     func clearCaches() {
         metadataCache.removeAll()
         videoCache.removeAll()
+        logger.info("Caches cleared")
     }
     
     func fetchCollectionItems(identifier: String? = nil, query: String? = nil, offset: Int = 0, limit: Int = 5) async throws -> [ArchiveVideo] {
-        print("InternetArchiveAPI: Searching with query: \(query ?? "nil"), collection: \(identifier ?? "nil")")
+        logger.debug("Fetching items - Query: \(query ?? "nil"), Collection: \(identifier ?? "nil")")
         
         let searchURL = URL(string: "\(Self.baseURL)/advancedsearch.php")!
         var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
         
-        // Build the query string
-        let queryString: String
-        if let query = query {
-            queryString = query
-        } else if let identifier = identifier {
-            queryString = "collection:\(identifier) AND (mediatype:movies OR mediatype:movingimage)"
+        // Build the query string without parentheses or special characters
+        var queryParts: [String] = []
+        
+        if let identifier = identifier {
+            // For collection-specific searches
+            queryParts.append("collection:\(identifier)")
+            queryParts.append("mediatype:movies")
+        } else if let query = query {
+            // For search/trending queries
+            queryParts.append(query)
+            queryParts.append("mediatype:movies")
         } else {
-            queryString = "(mediatype:movies OR mediatype:movingimage)"
+            // For random discovery
+            let collections = ["prelinger", "classic_tv", "sports", "movie_trailers", "artsandmusicvideos", "newsandpublicaffairs", "opensource_movies"]
+            let randomCollection = collections.randomElement() ?? "prelinger"
+            queryParts.append("collection:\(randomCollection)")
+            queryParts.append("mediatype:movies")
         }
+        
+        // Join query parts with AND
+        let queryString = queryParts.joined(separator: " AND ")
         
         // Base query items
         var queryItems = [
             URLQueryItem(name: "q", value: queryString),
-            URLQueryItem(name: "fl[]", value: "identifier,title,description,mediatype"),
             URLQueryItem(name: "output", value: "json"),
             URLQueryItem(name: "rows", value: "\(limit)"),
-            URLQueryItem(name: "page", value: "\((offset / limit) + 1)")
+            URLQueryItem(name: "page", value: "\(offset / limit + 1)"),
+            URLQueryItem(name: "fl[]", value: "identifier,title,description,mediatype")
         ]
         
         // Add sorting based on query type
-        if query != nil {
-            // For search queries, sort by relevance and downloads
-            queryItems.append(URLQueryItem(name: "sort[]", value: "-downloads"))
-            queryItems.append(URLQueryItem(name: "sort[]", value: "-week"))
-        } else if identifier == "artsandmusicvideos" {
-            queryItems.append(URLQueryItem(name: "sort[]", value: "-reviewdate"))
+        if identifier != nil {
+            queryItems.append(URLQueryItem(name: "sort[]", value: "addeddate desc"))
+        } else if query != nil {
+            queryItems.append(URLQueryItem(name: "sort[]", value: "downloads desc"))
         } else {
-            // Default sorting for collections
-            queryItems.append(URLQueryItem(name: "sort[]", value: "-downloads"))
-            queryItems.append(URLQueryItem(name: "sort[]", value: "-week"))
+            queryItems.append(URLQueryItem(name: "sort[]", value: "random"))
+            queryItems.append(URLQueryItem(name: "seed", value: "\(Int.random(in: 1...999999))"))
         }
         
         components.queryItems = queryItems
         
-        let (data, response) = try await URLSession.shared.data(from: components.url!)
+        guard let url = components.url else {
+            logger.error("Failed to construct URL from components")
+            throw NSError(domain: "InternetArchive", code: 400, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to construct valid URL"
+            ])
+        }
+        
+        logger.debug("Fetching from URL: \(url.absoluteString)")
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        // Debug: Print raw response
+        if let jsonString = String(data: data, encoding: .utf8) {
+            print("Raw JSON response: \(jsonString)")
+        }
         
         if let httpResponse = response as? HTTPURLResponse {
-            print("InternetArchiveAPI: Search response status code: \(httpResponse.statusCode)")
-            print("InternetArchiveAPI: Search URL: \(components.url?.absoluteString ?? "")")
-        }
-        
-        let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
-        print("InternetArchiveAPI: Found \(searchResponse.response.docs.count) items in current page")
-        
-        var videos: [ArchiveVideo] = []
-        
-        // Process only the items in the current page
-        for doc in searchResponse.response.docs {
-            if let cachedVideos = videoCache[doc.identifier] {
-                print("InternetArchiveAPI: Using cached videos for \(doc.identifier)")
-                videos.append(contentsOf: cachedVideos)
-                continue
+            logger.debug("Search response status: \(httpResponse.statusCode)")
+            
+            // Check for error response first
+            if httpResponse.statusCode >= 400 {
+                if let errorResponse = try? JSONDecoder().decode(ArchiveAPIError.self, from: data) {
+                    logger.error("API Error: \(errorResponse.error)")
+                    throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
+                        NSLocalizedDescriptionKey: errorResponse.error
+                    ])
+                }
+                throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
+                    NSLocalizedDescriptionKey: "API request failed"
+                ])
             }
             
-            print("InternetArchiveAPI: Fetching metadata for item: \(doc.identifier)")
-            if let metadata = try? await fetchMetadata(identifier: doc.identifier) {
-                let itemVideos = getVideoFiles(from: metadata)
-                if !itemVideos.isEmpty {
-                    videoCache[doc.identifier] = itemVideos
-                    videos.append(contentsOf: itemVideos)
-                    print("InternetArchiveAPI: Added \(itemVideos.count) videos from \(doc.identifier)")
-                } else {
-                    print("InternetArchiveAPI: No valid videos found in \(doc.identifier)")
+            // Try to decode the successful response
+            do {
+                let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
+                logger.info("Found \(searchResponse.response.docs.count) items")
+                
+                var videos: [ArchiveVideo] = []
+                
+                for doc in searchResponse.response.docs {
+                    if let metadata = try? await fetchMetadata(identifier: doc.identifier) {
+                        let itemVideos = getVideoFiles(from: metadata)
+                        videos.append(contentsOf: itemVideos)
+                    }
                 }
+                
+                return videos
+                
+            } catch {
+                logger.error("Error decoding response: \(error)")
+                throw error
             }
         }
         
-        print("InternetArchiveAPI: Total videos found in this page: \(videos.count)")
-        return videos
+        throw NSError(domain: "InternetArchive", code: 500, userInfo: [
+            NSLocalizedDescriptionKey: "Invalid response from server"
+        ])
     }
     
     private func fetchMetadata(identifier: String) async throws -> InternetArchiveMetadata {
         // Check cache first
         if let cached = metadataCache[identifier] {
-            print("InternetArchiveAPI: Using cached metadata for \(identifier)")
+            logger.debug("Using cached metadata for \(identifier)")
             return cached
         }
         
-        print("InternetArchiveAPI: Fetching metadata for \(identifier)")
+        logger.debug("Fetching metadata for \(identifier)")
         let url = URL(string: "\(Self.baseURL)/metadata/\(identifier)")!
         
         let (data, response) = try await URLSession.shared.data(from: url)
         
         if let httpResponse = response as? HTTPURLResponse {
-            print("InternetArchiveAPI: Metadata response status code: \(httpResponse.statusCode)")
-        }
-        
-        // Print raw JSON for debugging
-        if let jsonString = String(data: data, encoding: .utf8) {
-            print("InternetArchiveAPI: Raw metadata JSON: \(jsonString.prefix(500))...")
+            logger.debug("Metadata response status: \(httpResponse.statusCode)")
         }
         
         do {
             let metadata = try JSONDecoder().decode(InternetArchiveMetadata.self, from: data)
-            print("InternetArchiveAPI: Successfully decoded metadata with \(metadata.files.count) files")
-            
-            // Print some sample files for debugging
-            for file in metadata.files.prefix(5) {
-                print("InternetArchiveAPI: Sample file - name: \(file.name), format: \(file.format ?? "nil")")
-            }
+            logger.debug("Decoded metadata with \(metadata.files.count) files")
             
             // Cache the result
             metadataCache[identifier] = metadata
             return metadata
         } catch {
-            print("InternetArchiveAPI: Error decoding metadata: \(error)")
+            logger.error("Error decoding metadata: \(error)")
             throw error
         }
     }
     
     private func getVideoFiles(from metadata: InternetArchiveMetadata) -> [ArchiveVideo] {
-        // First pass: collect all video files and check for MP4 versions
         var videoMap: [String: [(InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)]] = [:]
         
-        // Define preferred formats and their priorities
-        let preferredFormats = [
-            "512kb.mp4": 1,
-            ".mp4": 2,
-            "h.264": 3,
-            "mpeg4": 4,
-            "m4v": 5,
-            "mov": 6,
-            "ogv": 7
+        // Known video extensions and formats
+        let validVideoExtensions = [".mp4", ".m4v", ".mov", ".avi", ".mkv"]
+        let validVideoFormats = ["h.264", "mpeg4", "quicktime", "matroska"]
+        
+        // Known non-video extensions
+        let nonVideoExtensions = [
+            ".mp3", ".ogg", ".wav", ".m4a", ".aac",  // Audio
+            ".srt", ".vtt",                          // Subtitles
+            ".gif", ".jpg", ".jpeg", ".png",         // Images
+            ".txt", ".nfo", ".xml", ".json",         // Text/Data
+            ".pdf", ".doc", ".docx",                 // Documents
+            ".sqlite", ".db", ".meta",               // Database/metadata
+            ".afpk", ".pkg",                         // Package files
+            ".zip", ".rar", ".7z"                    // Archives
         ]
         
         for file in metadata.files {
-            // Skip obvious non-video files
-            if file.name.hasSuffix(".srt") || file.name.hasSuffix(".vtt") ||
-               file.name.hasSuffix(".gif") || file.name.hasSuffix(".jpg") ||
-               file.name.hasSuffix(".png") || file.name.hasSuffix(".txt") ||
-               file.name.hasSuffix(".nfo") || file.name.hasSuffix(".xml") {
+            let name = file.name.lowercased()
+            let format = file.format?.lowercased() ?? ""
+            
+            // Skip files with known non-video extensions
+            if nonVideoExtensions.contains(where: { name.hasSuffix($0) }) {
                 continue
             }
             
-            // Check if this is a video file
-            let isVideoFile = preferredFormats.keys.contains { format in
-                file.name.lowercased().contains(format.lowercased()) ||
-                (file.format?.lowercased().contains(format.lowercased()) ?? false)
-            }
+            // Check if this is a video file using multiple criteria
+            let isVideoByExtension = validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isVideoByFormat = validVideoFormats.contains(where: { format.contains($0) })
+            let isVideoByFormatField = format.contains("video")
+            let is512kbVideo = name.contains("512kb") && validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isComputerChronicles = name.contains(".cct.") || name.contains("_512kb") || name.contains("_256kb")
+            
+            let isVideoFile = isVideoByExtension || isVideoByFormat || isVideoByFormatField || is512kbVideo || isComputerChronicles
             
             if isVideoFile {
-                // Get the priority for this format
-                let priority = preferredFormats.first { format, _ in
-                    file.name.lowercased().contains(format.lowercased()) ||
-                    (file.format?.lowercased().contains(format.lowercased()) ?? false)
-                }?.value ?? 999
-                
                 let format = file.videoFormat ?? .mp4
                 let baseTitle = file.title ?? metadata.metadata.title ?? file.name
                 let key = baseTitle.lowercased()
@@ -374,26 +466,38 @@ actor InternetArchiveAPI {
             }
         }
         
-        // Second pass: select best format for each video
+        // If no video files found, return empty array
+        if videoMap.isEmpty {
+            return []
+        }
+        
         var bestFormatVideos: [ArchiveVideo] = []
         
         for (_, variants) in videoMap {
-            // Sort variants by format priority and prefer 512kb versions
             let sortedVariants = variants.sorted { (a, b) -> Bool in
-                // Always prefer 512kb versions
-                if a.0.name.contains("512kb") && !b.0.name.contains("512kb") {
+                let name1 = a.0.name.lowercased()
+                let name2 = b.0.name.lowercased()
+                
+                // Prefer 512kb versions
+                if name1.contains("512kb") && !name2.contains("512kb") {
                     return true
                 }
-                if !a.0.name.contains("512kb") && b.0.name.contains("512kb") {
+                if !name1.contains("512kb") && name2.contains("512kb") {
                     return false
                 }
                 
-                // Then prefer mp4 over other formats
-                if a.0.name.hasSuffix(".mp4") && !b.0.name.hasSuffix(".mp4") {
+                // Then prefer mp4
+                if name1.hasSuffix(".mp4") && !name2.hasSuffix(".mp4") {
                     return true
                 }
-                if !a.0.name.hasSuffix(".mp4") && b.0.name.hasSuffix(".mp4") {
+                if !name1.hasSuffix(".mp4") && name2.hasSuffix(".mp4") {
                     return false
+                }
+                
+                // Finally sort by size if available
+                if let size1 = Int(a.0.size ?? "0"),
+                   let size2 = Int(b.0.size ?? "0") {
+                    return size1 > size2 // Prefer larger files
                 }
                 
                 return a.1.rawValue < b.1.rawValue
@@ -412,10 +516,10 @@ actor InternetArchiveAPI {
                 )
                 
                 bestFormatVideos.append(video)
-                print("InternetArchiveAPI: Added video: \(file.name) from \(metadata.metadata.identifier)")
             }
         }
         
         return bestFormatVideos
     }
 }
+

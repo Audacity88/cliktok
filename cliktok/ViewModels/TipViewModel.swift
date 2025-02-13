@@ -70,7 +70,7 @@ class TipViewModel: ObservableObject {
     }
     
     // Helper method to get development mode balance
-    private func getDevelopmentBalance() -> Double {
+    func getDevelopmentBalance() -> Double {
         guard let balanceKey = getUserBalanceKey() else { return 0.0 }
         return UserDefaults.standard.double(forKey: balanceKey)
     }
@@ -118,6 +118,10 @@ class TipViewModel: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
         
+        // Set the selected amount before starting the payment process
+        print("💰 Setting selected amount to: $\(String(format: "%.2f", amount))")
+        self.selectedAmount = amount
+        
         do {
             let serverURL = try await Configuration.getServerURL()
             let backendUrl = serverURL.appendingPathComponent("create-payment-intent")
@@ -158,9 +162,13 @@ class TipViewModel: ObservableObject {
                 configuration: configuration
             )
             
+            // Verify selected amount is still set before showing payment sheet
+            print("💰 Verifying selected amount before showing payment sheet: $\(String(format: "%.2f", selectedAmount ?? 0.0))")
             isPaymentSheetPresented = true
             
         } catch {
+            // Clear selected amount on error
+            selectedAmount = nil
             print("Error: \(error)")
             throw error
         }
@@ -172,26 +180,63 @@ class TipViewModel: ObservableObject {
             print("Payment completed!")
             // Update development balance with the selected amount
             if let amount = selectedAmount {
-                let oldBalance = balance
+                print("💰 Processing payment of $\(String(format: "%.2f", amount))")
+                
+                // Get current balance from storage
+                let oldBalance = getDevelopmentBalance()
                 let newBalance = oldBalance + amount
-                balance = newBalance
+                
+                print("💰 Current stored balance: $\(String(format: "%.2f", oldBalance))")
+                print("💰 New balance will be: $\(String(format: "%.2f", newBalance))")
+                
+                // Update UserDefaults first
                 setDevelopmentBalance(newBalance)
-                logBalanceChange(oldBalance: oldBalance, 
-                               newBalance: newBalance, 
-                               reason: "Added Funds",
-                               details: ["amount": amount])
+                
+                // Verify the update
+                let verifiedBalance = getDevelopmentBalance()
+                print("💰 Verified stored balance: $\(String(format: "%.2f", verifiedBalance))")
+                
+                // Then update the published property on the main actor
+                await MainActor.run {
+                    // Update the published balance property
+                    self.balance = verifiedBalance
+                    
+                    // Log the change
+                    logBalanceChange(
+                        oldBalance: oldBalance,
+                        newBalance: verifiedBalance,
+                        reason: "Added Funds",
+                        details: ["amount": amount]
+                    )
+                    
+                    // Show success alert
+                    showSuccessAlert = true
+                    
+                    // Reset selected amount after successful payment
+                    selectedAmount = nil
+                }
+                
+                // Final verification
+                print("💰 Final balance check - Storage: $\(String(format: "%.2f", getDevelopmentBalance())), Published: $\(String(format: "%.2f", balance))")
+            } else {
+                print("⚠️ Warning: No selected amount found for completed payment")
             }
-            showSuccessAlert = true
             
         case .canceled:
             print("Payment canceled.")
-            errorMessage = "Payment was canceled"
-            showError = true
+            await MainActor.run {
+                errorMessage = "Payment was canceled"
+                showError = true
+                selectedAmount = nil
+            }
             
         case .failed(let error):
             print("Payment failed: \(error.localizedDescription)")
-            errorMessage = error.localizedDescription
-            showError = true
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                showError = true
+                selectedAmount = nil
+            }
         }
     }
     

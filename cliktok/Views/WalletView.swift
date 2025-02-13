@@ -244,8 +244,17 @@ private struct WalletContentView: View {
                 PaymentSheetViewController(paymentSheet: paymentSheet) { result in
                     viewModel.isPaymentSheetPresented = false
                     Task {
+                        // Handle payment completion first
                         await viewModel.handlePaymentCompletion(result)
-                        await loadData()
+                        
+                        // Force UI refresh by reloading data
+                        print("🔄 Reloading wallet data after payment")
+                        await viewModel.loadBalance()
+                        await viewModel.loadTipHistory()
+                        
+                        // Additional balance check
+                        let currentBalance = viewModel.getDevelopmentBalance()
+                        print("💰 Current balance after reload: \(currentBalance)")
                     }
                 }
                 .edgesIgnoringSafeArea(.all)
@@ -278,6 +287,8 @@ private struct WalletContentView: View {
     private func handleAddFunds(_ amount: Double) {
         Task {
             do {
+                print("💰 WalletView: Adding funds: $\(String(format: "%.2f", amount))")
+                viewModel.selectedAmount = amount  // Set the amount before calling addFunds
                 try await viewModel.addFunds(amount)
                 await loadData()
             } catch {

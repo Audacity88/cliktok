@@ -300,28 +300,23 @@ struct UnifiedVideoView: View {
                 .task {
                     await handleInitialLoad()
                 }
+                .onAppear {
+                    // Preload collections when archive tab is opened
+                    if mode == .archive {
+                        archiveViewModel.preloadCollections()
+                    }
+                }
+                .onDisappear {
+                    // Cancel preloading when view disappears
+                    if mode == .archive {
+                        archiveViewModel.cancelPreloading()
+                    }
+                }
             }
             
             // Navigation controls
             if shouldShowNavigation {
                 HStack(spacing: 16) {
-                    // Mode toggle
-                    if mode != .search && mode != .grid {
-                        Button(action: {
-                            withAnimation {
-                                mode = mode == .feed ? .archive : .feed
-                                currentIndex = 0
-                            }
-                        }) {
-                            Image(systemName: mode == .feed ? "film" : "house")
-                                .font(.system(size: 24))
-                                .foregroundColor(.green)
-                                .frame(width: 44, height: 44)
-                                .background(Color.black.opacity(0.5))
-                                .clipShape(Circle())
-                        }
-                    }
-                    
                     // Collections button for archive mode
                     if mode == .archive {
                         Button(action: {

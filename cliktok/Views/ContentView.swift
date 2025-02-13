@@ -129,7 +129,7 @@ struct ContentView: View {
                         }
                         .tabItem {
                             Image(systemName: "tv")
-                            Text("Archive")
+                            Text("Collections")
                         }
                         .tag(1)
                         
@@ -139,7 +139,7 @@ struct ContentView: View {
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
-                            Image(systemName: "house.fill")
+                            Image(systemName: "photo.stack")
                             Text("Uploads")
                         }
                         .tag(2)
