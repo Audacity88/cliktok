@@ -74,4 +74,12 @@ firebase-debug.log
 *.mobileprovision
 *.provisionprofile
 *.cer
-secrets.xcconfig 
+secrets.xcconfig
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity 

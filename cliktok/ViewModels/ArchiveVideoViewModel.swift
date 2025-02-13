@@ -56,42 +56,49 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     private func prefetchCollections(_ collections: [ArchiveCollection]) async {
-        // Only prefetch first 3 collections
-        for collection in collections.prefix(3) {
+        // Only prefetch first 2 collections to reduce load
+        for collection in collections.prefix(2) {
             // Don't prefetch test videos
             guard collection.id != "test_videos" else { continue }
             
+            // Cancel any existing prefetch task for this collection
             prefetchTasks[collection.id]?.cancel()
+            
+            // Add increasing delay for each collection to prevent overwhelming the API
+            if let index = collections.firstIndex(of: collection), index > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(index) * 2_000_000_000) // 2 second delay per collection
+            }
+            
             let task = Task {
                 do {
+                    // Only fetch first 3 videos per collection for prefetch
                     let videos = try await api.fetchCollectionItems(
                         identifier: collection.id,
                         offset: 0,
-                        limit: pageSize
+                        limit: 3
                     )
                     
-                    // Cache the videos metadata only
-                    await MainActor.run {
-                        if let index = self.collections.firstIndex(where: { $0.id == collection.id }) {
-                            var updatedCollection = self.collections[index]
-                            updatedCollection.videos = videos
-                            self.collections[index] = updatedCollection
-                            
-                            // Mark range as loaded
-                            var ranges = self.loadedRanges[collection.id] ?? Set<Range<Int>>()
-                            ranges.insert(0..<self.pageSize)
-                            self.loadedRanges[collection.id] = ranges
+                    // Cache the videos metadata only if task wasn't cancelled
+                    if !Task.isCancelled {
+                        await MainActor.run {
+                            if let index = self.collections.firstIndex(where: { $0.id == collection.id }) {
+                                var updatedCollection = self.collections[index]
+                                updatedCollection.videos = videos
+                                self.collections[index] = updatedCollection
+                                
+                                // Mark range as loaded
+                                var ranges = self.loadedRanges[collection.id] ?? Set<Range<Int>>()
+                                ranges.insert(0..<3)
+                                self.loadedRanges[collection.id] = ranges
+                            }
+                        }
+                        
+                        // Only prefetch thumbnails for first video
+                        if let firstVideo = videos.first,
+                           let thumbnailURL = URL(string: InternetArchiveAPI.getThumbnailURL(identifier: firstVideo.id).absoluteString) {
+                            await ImageCache.shared.prefetchImages([thumbnailURL])
                         }
                     }
-                    
-                    // Only prefetch thumbnails, no video assets
-                    Task {
-                        let thumbnailURLs = videos.compactMap { video in
-                            URL(string: InternetArchiveAPI.getThumbnailURL(identifier: video.id).absoluteString)
-                        }
-                        await ImageCache.shared.prefetchImages(thumbnailURLs)
-                    }
-                    
                 } catch {
                     print("Error prefetching collection \(collection.id): \(error)")
                 }
@@ -296,17 +303,23 @@ class ArchiveVideoViewModel: ObservableObject {
         preloadTask?.cancel()
         
         preloadTask = Task {
-            // First, preload all collection thumbnails
-            let thumbnailURLs = collections.compactMap { collection in
+            // First, preload only essential collection thumbnails
+            let essentialCollections = collections.prefix(3)
+            let thumbnailURLs = essentialCollections.compactMap { collection in
                 URL(string: InternetArchiveAPI.getThumbnailURL(identifier: collection.id).absoluteString)
             }
             await ImageCache.shared.prefetchImages(thumbnailURLs)
             
-            // Then preload first video from each collection
-            for collection in collections {
+            // Then preload first video from each essential collection
+            for collection in essentialCollections {
                 guard !Task.isCancelled else { break }
                 
                 do {
+                    // Add increasing delay between collections
+                    if let index = collections.firstIndex(of: collection), index > 0 {
+                        try await Task.sleep(nanoseconds: UInt64(index) * 1_000_000_000) // 1 second delay per collection
+                    }
+                    
                     let videos = try await api.fetchCollectionItems(
                         identifier: collection.id,
                         offset: 0,
@@ -326,17 +339,16 @@ class ArchiveVideoViewModel: ObservableObject {
                             self.loadedRanges[collection.id] = ranges
                         }
                         
-                        // Preload video thumbnails
+                        // Preload video thumbnail with low priority
                         if let videoThumbnailURL = URL(string: videos.first?.thumbnailURL ?? "") {
-                            await ImageCache.shared.prefetchImages([videoThumbnailURL])
+                            Task.detached(priority: .background) {
+                                await ImageCache.shared.prefetchImages([videoThumbnailURL])
+                            }
                         }
                     }
                 } catch {
                     print("Error preloading collection \(collection.id): \(error)")
                 }
-                
-                // Add a small delay between collections to avoid overwhelming the API
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
             }
         }
     }

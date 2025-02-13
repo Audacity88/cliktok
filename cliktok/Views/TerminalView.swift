@@ -289,8 +289,6 @@ struct TerminalView: View {
             handlePlayCommand(cmd)
         case let cmd where cmd.hasPrefix("view "):
             handleViewCommand(cmd)
-        case "trending":
-            handleTrendingSearch()
         case "random":
             handleRandomSearch()
         case "back":
@@ -315,7 +313,6 @@ struct TerminalView: View {
         
         Search commands:
         - search [query]: Search for videos
-        - trending: Show trending videos
         - random: Show random videos
         - play [number]: Play video from search results
         
@@ -338,10 +335,7 @@ struct TerminalView: View {
            - search classic movies from 1950 to 1960
            - search viral dance videos from 2020s
         
-        2. Trending Videos:
-           trending
-        
-        3. Random Videos:
+        2. Random Videos:
            random
         
         The AI will understand:
@@ -541,91 +535,6 @@ struct TerminalView: View {
         - back: Return to search results
         """))
         isProcessing = false
-    }
-    
-    private func handleTrendingSearch() {
-        Task { @MainActor in
-            isProcessing = true
-            conversation.append((role: "system", content: "Finding trending videos..."))
-            
-            // Track already displayed results to avoid duplicates
-            var displayedResults = Set<String>()
-            var headerShown = false
-            
-            // Set up the callback for new results
-            aiService.onResultFound = { (video: ArchiveVideo) in
-                Task { @MainActor in
-                    if !displayedResults.contains(video.identifier) {
-                        displayedResults.insert(video.identifier)
-                        
-                        // Show header if this is the first result
-                        if !headerShown {
-                            conversation.append((role: "system", content: """
-                            ╔═══ TRENDING VIDEOS ═══╗
-                            Found trending videos:
-                            ═══════════════════════
-                            """))
-                            headerShown = true
-                        }
-                        
-                        let result = """
-                        [\(displayedResults.count)] \(video.title)
-                        ├─ ID: \(video.identifier)
-                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
-                        └─ URL: \(video.videoURL)
-                        ───────────────────────
-                        """
-                        conversation.append((role: "system", content: result))
-                    }
-                }
-            }
-            
-            // Start the trending search with specific parameters
-            aiService.searchQuery = ""  // Clear any existing query
-            do {
-                // Get trending videos with simpler, more reliable query
-                let trendingQuery = """
-                mediatype:(movies OR movingimage) \
-                -collection:test_videos \
-                -collection:stream_only \
-                format:(mp4 OR h.264) \
-                sort[]=downloads desc \
-                sort[]=week desc
-                """
-                let results = try await InternetArchiveAPI.shared.fetchCollectionItems(
-                    query: trendingQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trendingQuery,
-                    offset: 0,
-                    limit: 10
-                )
-                
-                // Process and display results
-                for video in results {
-                    await MainActor.run {
-                        aiService.onResultFound?(video)
-                    }
-                }
-            } catch {
-                conversation.append((role: "system", content: "Error finding trending videos: \(error.localizedDescription)"))
-            }
-            
-            // Clear the callback
-            aiService.onResultFound = nil
-            
-            if displayedResults.isEmpty {
-                conversation.append((role: "system", content: "No trending videos found."))
-            } else {
-                // Show footer
-                conversation.append((role: "system", content: """
-                
-                Commands:
-                - play [ID]: Play video
-                - info [ID]: Show full video info
-                - trending: Refresh trending videos
-                """))
-            }
-            
-            isProcessing = false
-        }
     }
     
     private func handleRandomSearch() {

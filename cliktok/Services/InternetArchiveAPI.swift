@@ -271,12 +271,15 @@ actor InternetArchiveAPI {
     // Cache for metadata to prevent repeated fetches
     private var metadataCache: [String: InternetArchiveMetadata] = [:]
     private var videoCache: [String: [ArchiveVideo]] = [:]
+    private var metadataFetchTasks: [String: Task<InternetArchiveMetadata, Error>] = [:]
     
     private init() {}
     
     func clearCaches() {
         metadataCache.removeAll()
         videoCache.removeAll()
+        metadataFetchTasks.values.forEach { $0.cancel() }
+        metadataFetchTasks.removeAll()
         logger.info("Caches cleared")
     }
     
@@ -299,10 +302,23 @@ actor InternetArchiveAPI {
             queryParts.append("mediatype:movies")
         } else {
             // For random discovery
-            let collections = ["prelinger", "classic_tv", "sports", "movie_trailers", "artsandmusicvideos", "newsandpublicaffairs", "opensource_movies"]
-            let randomCollection = collections.randomElement() ?? "prelinger"
-            queryParts.append("collection:\(randomCollection)")
-            queryParts.append("mediatype:movies")
+            // Exclude collections that tend to dominate results
+            queryParts.append("-collection:electricsheep")  // Exclude Electric Sheep animations
+            queryParts.append("-collection:stream_only")    // Exclude streaming-only content
+            queryParts.append("-collection:test_videos")    // Exclude test videos
+            queryParts.append("mediatype:movies")          // Only movies
+            queryParts.append("format:(mp4 OR h.264)")     // Only common video formats
+            
+            // Add a random collection filter occasionally
+            if Bool.random() {
+                let collections = [
+                    "prelinger", "classic_tv", "sports", "movie_trailers",
+                    "artsandmusicvideos", "newsandpublicaffairs", "opensource_movies",
+                    "feature_films", "animation", "vintage_cartoons", "short_films"
+                ]
+                let randomCollection = collections.randomElement() ?? "prelinger"
+                queryParts.append("collection:\(randomCollection)")
+            }
         }
         
         // Join query parts with AND
@@ -313,18 +329,24 @@ actor InternetArchiveAPI {
             URLQueryItem(name: "q", value: queryString),
             URLQueryItem(name: "output", value: "json"),
             URLQueryItem(name: "rows", value: "\(limit)"),
-            URLQueryItem(name: "page", value: "\(offset / limit + 1)"),
             URLQueryItem(name: "fl[]", value: "identifier,title,description,mediatype")
         ]
         
         // Add sorting based on query type
         if identifier != nil {
+            // Collection-specific: sort by date
             queryItems.append(URLQueryItem(name: "sort[]", value: "addeddate desc"))
         } else if query != nil {
+            // Search: sort by relevance and popularity
             queryItems.append(URLQueryItem(name: "sort[]", value: "downloads desc"))
+            queryItems.append(URLQueryItem(name: "sort[]", value: "week desc"))
         } else {
+            // Random discovery: use random sort with random page
             queryItems.append(URLQueryItem(name: "sort[]", value: "random"))
             queryItems.append(URLQueryItem(name: "seed", value: "\(Int.random(in: 1...999999))"))
+            // Use random offset for more variety
+            let randomOffset = Int.random(in: 0...200)
+            queryItems.append(URLQueryItem(name: "page", value: "\(randomOffset / limit + 1)"))
         }
         
         components.queryItems = queryItems
@@ -394,29 +416,52 @@ actor InternetArchiveAPI {
             return cached
         }
         
-        logger.debug("Fetching metadata for \(identifier)")
-        let url = URL(string: "\(Self.baseURL)/metadata/\(identifier)")!
-        
-        let (data, response) = try await URLSession.shared.data(from: url)
-        
-        if let httpResponse = response as? HTTPURLResponse {
-            logger.debug("Metadata response status: \(httpResponse.statusCode)")
+        // Check if there's already a fetch in progress
+        if let existingTask = metadataFetchTasks[identifier] {
+            logger.debug("Using existing fetch task for \(identifier)")
+            return try await existingTask.value
         }
         
-        do {
+        // Create new fetch task
+        let task = Task<InternetArchiveMetadata, Error> {
+            logger.debug("Fetching metadata for \(identifier)")
+            let url = URL(string: "\(Self.baseURL)/metadata/\(identifier)")!
+            
+            let (data, response) = try await URLSession.shared.data(from: url)
+            
+            if let httpResponse = response as? HTTPURLResponse {
+                logger.debug("Metadata response status: \(httpResponse.statusCode)")
+            }
+            
             let metadata = try JSONDecoder().decode(InternetArchiveMetadata.self, from: data)
             logger.debug("Decoded metadata with \(metadata.files.count) files")
             
             // Cache the result
             metadataCache[identifier] = metadata
             return metadata
+        }
+        
+        // Store the task
+        metadataFetchTasks[identifier] = task
+        
+        do {
+            let result = try await task.value
+            metadataFetchTasks[identifier] = nil
+            return result
         } catch {
-            logger.error("Error decoding metadata: \(error)")
+            metadataFetchTasks[identifier] = nil
             throw error
         }
     }
     
     private func getVideoFiles(from metadata: InternetArchiveMetadata) -> [ArchiveVideo] {
+        // Check video cache first
+        if let cached = videoCache[metadata.metadata.identifier] {
+            logger.debug("Using cached videos for \(metadata.metadata.identifier)")
+            return cached
+        }
+        
+        // Process video files
         var videoMap: [String: [(InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)]] = [:]
         
         // Known video extensions and formats
@@ -519,7 +564,10 @@ actor InternetArchiveAPI {
             }
         }
         
-        return bestFormatVideos
+        // Cache the results before returning
+        let videos = bestFormatVideos
+        videoCache[metadata.metadata.identifier] = videos
+        return videos
     }
 }
 

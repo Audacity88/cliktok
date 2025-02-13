@@ -2,6 +2,7 @@ import SwiftUI
 import AVKit
 import AVFoundation
 import os
+import Network
 
 class VideoPlayerViewModel: NSObject, ObservableObject {
     // Add static property to track currently playing instance
@@ -34,6 +35,38 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     private var pendingVisibilityUpdate: Bool?
     private var isLoadingTask: Task<Void, Never>?
     
+    private var assetCache = NSCache<NSURL, AVAsset>()
+    private var loadingAssets: [URL: Task<AVAsset, Error>] = [:]
+    private var preloadedData: [URL: Data] = [:]
+    private var currentQuality: VideoQuality = .low // Start with low quality for faster initial load
+    private let networkMonitor = NWPathMonitor()
+    private let monitorQueue = DispatchQueue(label: "com.cliktok.network")
+    
+    enum VideoQuality {
+        case auto
+        case low    // 360p
+        case medium // 720p
+        case high   // 1080p
+        
+        var maxBitrate: Int {
+            switch self {
+            case .auto: return 0 // Will be determined dynamically
+            case .low: return 500_000    // 500 Kbps for faster initial load
+            case .medium: return 1_500_000 // 1.5 Mbps
+            case .high: return 3_000_000   // 3 Mbps
+            }
+        }
+        
+        var preferredMaximumResolution: AVAssetReferenceRestrictions {
+            switch self {
+            case .auto, .high:
+                return [] // No restrictions for high quality
+            case .medium, .low:
+                return .init(rawValue: 1 << 0) // Basic restriction level for faster loading
+            }
+        }
+    }
+    
     private var videoIdentifier: String {
         if let url = videoURL {
             if url.contains("archive.org") {
@@ -55,6 +88,64 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             return url.count > maxLength ? String(url.prefix(maxLength)) + "..." : url
         }
         return "unknown"
+    }
+    
+    override init() {
+        super.init()
+        setupNetworkMonitoring()
+    }
+    
+    private func setupNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            DispatchQueue.main.async {
+                self.handleNetworkQualityChange(path)
+            }
+        }
+        networkMonitor.start(queue: monitorQueue)
+    }
+    
+    private func handleNetworkQualityChange(_ path: NWPath) {
+        let quality: VideoQuality
+        switch path.status {
+        case .satisfied:
+            if path.isExpensive {
+                quality = .low
+            } else if path.isConstrained {
+                quality = .medium
+            } else {
+                quality = .high
+            }
+        case .unsatisfied, .requiresConnection:
+            quality = .low
+        @unknown default:
+            quality = .low
+        }
+        
+        if quality != currentQuality {
+            currentQuality = quality
+            logger.debug("🌐 Network quality changed, new target quality: \(quality)")
+            upgradeQualityIfNeeded()
+        }
+    }
+    
+    private func upgradeQualityIfNeeded() {
+        guard let player = player,
+              let currentItem = player.currentItem,
+              currentItem.status == .readyToPlay,
+              !isLoadingVideo else {
+            return
+        }
+        
+        // Only upgrade if we've been playing for at least 5 seconds
+        guard let startTime = lastPlaybackStartTime,
+              Date().timeIntervalSince(startTime) >= 5.0 else {
+            return
+        }
+        
+        Task {
+            await loadAndPlayVideo()
+        }
     }
     
     func setVideo(url: String, isVisible: Bool, hideControls: @escaping () -> Void) {
@@ -144,64 +235,55 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             await MainActor.run {
                 isLoadingVideo = true
                 duration = 0 // Reset duration
-                
-                // Only cleanup existing player if we're not just updating the URL
-                if player != nil {
-                    cleanupPlayer()
-                }
             }
             
             do {
-                logger.debug("🔄 [\(videoIdentifier)] Requesting asset from loader")
-                let asset = try await VideoAssetLoader.shared.loadAsset(for: url)
-                
-                // Load duration asynchronously before creating player item
-                let durationValue = try await asset.load(.duration)
-                let durationSeconds = CMTimeGetSeconds(durationValue)
-                
-                logger.debug("🎬 [\(videoIdentifier)] Creating player item")
-                let playerItem = AVPlayerItem(asset: asset)
-                playerItem.preferredForwardBufferDuration = 2
-                playerItem.automaticallyPreservesTimeOffsetFromLive = false
-                
-                // Add error handling for playback issues
-                playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
-                
-                await MainActor.run {
-                    logger.debug("🔧 [\(videoIdentifier)] Setting up player on main thread")
-                    
-                    // Set duration first
-                    if durationSeconds.isFinite {
-                        self.duration = durationSeconds
-                    }
-                    
-                    let newPlayer = AVPlayer(playerItem: playerItem)
-                    newPlayer.automaticallyWaitsToMinimizeStalling = false
-                    newPlayer.isMuted = isMuted
-                    newPlayer.volume = 1.0
-                    
-                    setupTimeObserver(for: newPlayer)
-                    
-                    self.player = newPlayer
-                    self.isValidForPlayback = true
-                    
-                    // If this video should be visible, make it the currently playing video
-                    if isVisible {
-                        logger.debug("👁️ [\(videoIdentifier)] Video is visible, setting as current")
-                        VideoPlayerViewModel.currentlyPlayingViewModel = self
-                        // Don't start playing here - wait for ready to play status
-                        isPlaying = false
-                        showPlayButton = true
-                    } else {
-                        logger.debug("👁️ [\(videoIdentifier)] Video is not visible, staying paused")
-                        isPlaying = false
-                        showPlayButton = true
-                    }
-                    
-                    logger.success("✅ [\(videoIdentifier)] Video setup completed in \(Date().timeIntervalSince(startTime))s")
-                    isLoadingVideo = false
+                // Check cache first
+                if let cachedAsset = assetCache.object(forKey: url as NSURL) {
+                    logger.debug("📦 [\(videoIdentifier)] Using cached asset")
+                    await configurePlayer(with: cachedAsset)
+                    return
                 }
+                
+                // Check if there's already a loading task
+                if let existingTask = loadingAssets[url] {
+                    logger.debug("⏳ [\(videoIdentifier)] Using existing loading task")
+                    let asset = try await existingTask.value
+                    await configurePlayer(with: asset)
+                    return
+                }
+                
+                // Create new loading task
+                let loadingTask = Task<AVAsset, Error> {
+                    let asset = AVURLAsset(url: url)
+                    
+                    // Configure asset based on current quality setting
+                    let resourceLoader = asset.resourceLoader
+                    resourceLoader.preloadsEligibleContentKeys = true
+                    
+                    let options = [
+                        AVURLAssetPreferPreciseDurationAndTimingKey: true,
+                        AVURLAssetReferenceRestrictionsKey: currentQuality.preferredMaximumResolution
+                    ] as [String: Any]
+                    
+                    // Load essential properties first
+                    try await loadInitialMetadata(for: asset)
+                    
+                    // Cache the asset
+                    assetCache.setObject(asset, forKey: url as NSURL)
+                    
+                    return asset
+                }
+                
+                loadingAssets[url] = loadingTask
+                
+                let asset = try await loadingTask.value
+                loadingAssets[url] = nil
+                
+                await configurePlayer(with: asset)
+                
             } catch {
+                loadingAssets[url] = nil
                 logger.error("❌ [\(videoIdentifier)] Error loading video: \(error.localizedDescription)")
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
@@ -220,6 +302,60 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         
         // Clear loading task at the end
         isLoadingTask = nil
+    }
+    
+    @MainActor
+    private func configurePlayer(with asset: AVAsset) async {
+        logger.debug("🔧 [\(videoIdentifier)] Configuring player with asset")
+        
+        do {
+            // Load duration asynchronously before creating player item
+            let durationValue = try await asset.load(.duration)
+            let durationSeconds = CMTimeGetSeconds(durationValue)
+            
+            // Create player item with optimized settings
+            let playerItem = AVPlayerItem(asset: asset)
+            playerItem.preferredForwardBufferDuration = 2
+            playerItem.automaticallyPreservesTimeOffsetFromLive = false
+            
+            // Add error handling for playback issues
+            playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
+            
+            // Set duration first
+            if durationSeconds.isFinite {
+                self.duration = durationSeconds
+            }
+            
+            let newPlayer = AVPlayer(playerItem: playerItem)
+            newPlayer.automaticallyWaitsToMinimizeStalling = false
+            newPlayer.isMuted = isMuted
+            newPlayer.volume = 1.0
+            
+            setupTimeObserver(for: newPlayer)
+            
+            self.player = newPlayer
+            self.isValidForPlayback = true
+            
+            // If this video should be visible, make it the currently playing video
+            if isVisible {
+                logger.debug("👁️ [\(videoIdentifier)] Video is visible, setting as current")
+                VideoPlayerViewModel.currentlyPlayingViewModel = self
+                isPlaying = false
+                showPlayButton = true
+            } else {
+                logger.debug("👁️ [\(videoIdentifier)] Video is not visible, staying paused")
+                isPlaying = false
+                showPlayButton = true
+            }
+            
+            isLoadingVideo = false
+            
+        } catch {
+            logger.error("❌ [\(videoIdentifier)] Error configuring player: \(error.localizedDescription)")
+            self.errorMessage = error.localizedDescription
+            self.showError = true
+            isLoadingVideo = false
+        }
     }
     
     override public func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
@@ -358,6 +494,17 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             VideoPlayerViewModel.currentlyPlayingViewModel = nil
         }
         
+        // Cancel any loading tasks
+        isLoadingTask?.cancel()
+        isLoadingTask = nil
+        
+        // Clean up loading assets
+        if let urlString = videoURL, let url = URL(string: urlString) {
+            loadingAssets[url]?.cancel()
+            loadingAssets[url] = nil
+            preloadedData[url] = nil
+        }
+        
         if let currentPlayer = player {
             logger.debug("⏹️ [\(videoIdentifier)] Pausing and cleaning up current player")
             currentPlayer.pause()
@@ -387,17 +534,10 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         duration = 0
         showPlayButton = true
         
-        // Clean up asset loader cache for this video
-        if let urlString = videoURL,
-           let url = URL(string: urlString) {
-            Task {
-                logger.debug("🗑️ [\(videoIdentifier)] Cleaning up asset for URL: \(urlString)")
-                await VideoAssetLoader.shared.cleanupAsset(for: url)
-            }
-        }
+        // Reset quality state
+        currentQuality = .low
         
         isInCleanupState = false
-        isPlaybackStarting = false
     }
     
     private func setupTimeObserver(for player: AVPlayer) {
@@ -487,5 +627,72 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
         let cmTime = CMTime(seconds: time, preferredTimescale: 1000)
         player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
         logger.debug("⏩ [\(videoIdentifier)] Seeking to: \(String(format: "%.2f", time))s")
+    }
+    
+    deinit {
+        networkMonitor.cancel()
+        performCleanup()
+    }
+    
+    private func loadInitialMetadata(for asset: AVAsset) async throws {
+        let startTime = Date()
+        logger.debug("📊 [\(videoIdentifier)] Starting metadata load")
+        
+        // Load only essential properties first
+        let essentialLoadingKeys: [String] = [
+            "tracks",
+            "duration",
+            "playable"
+        ]
+        
+        // Load essential properties in parallel
+        try await asset.loadValues(forKeys: essentialLoadingKeys)
+        
+        // Load tracks in parallel with optimized loading
+        async let videoTrackTask = try await asset.loadTracks(withMediaType: .video)
+        async let audioTrackTask = try await asset.loadTracks(withMediaType: .audio)
+        
+        let (videoTracks, audioTracks) = try await (videoTrackTask, audioTrackTask)
+        
+        guard let videoTrack = videoTracks.first else {
+            logger.error("❌ [\(videoIdentifier)] No video track found in asset")
+            throw AssetError.noVideoTrack
+        }
+        
+        // Load essential video properties in parallel
+        logger.debug("🎥 [\(videoIdentifier)] Loading video track properties")
+        let videoPropertiesStartTime = Date()
+        
+        let propertiesToLoad: [String] = ["formatDescriptions", "naturalSize", "preferredTransform"]
+        try await videoTrack.loadValues(forKeys: propertiesToLoad)
+        
+        logger.performance("⚡️ [\(videoIdentifier)] Video properties loaded in \(Date().timeIntervalSince(videoPropertiesStartTime))s")
+        
+        // Load audio track properties in background with lower priority
+        if let audioTrack = audioTracks.first {
+            Task.detached(priority: .background) {
+                self.logger.debug("🔊 [\(self.videoIdentifier)] Loading audio track properties in background")
+                try? await audioTrack.loadValues(forKeys: ["formatDescriptions"])
+            }
+        }
+        
+        logger.success("✅ [\(videoIdentifier)] Initial metadata loaded in \(Date().timeIntervalSince(startTime))s")
+    }
+    
+    enum AssetError: Error {
+        case noVideoTrack
+        case invalidFormat
+        case loadingFailed
+        
+        var localizedDescription: String {
+            switch self {
+            case .noVideoTrack:
+                return "No video track found in asset"
+            case .invalidFormat:
+                return "Invalid video format"
+            case .loadingFailed:
+                return "Failed to load asset"
+            }
+        }
     }
 } 

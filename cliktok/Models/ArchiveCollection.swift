@@ -1,6 +1,6 @@
 import Foundation
 
-struct ArchiveCollection: Identifiable {
+struct ArchiveCollection: Identifiable, Equatable {
     let id: String
     let title: String
     let description: String
@@ -13,5 +13,9 @@ struct ArchiveCollection: Identifiable {
         self.description = description
         self.thumbnailURL = thumbnailURL
         self.videos = videos
+    }
+    
+    static func == (lhs: ArchiveCollection, rhs: ArchiveCollection) -> Bool {
+        lhs.id == rhs.id
     }
 }
