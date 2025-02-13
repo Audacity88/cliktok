@@ -694,88 +694,7 @@ struct VideoControlButtons: View {
                     
                     // Heart button with retro styling
                     VStack(spacing: 4) {
-                        Button(action: {
-                            Task {
-                                do {
-                                    // Prevent rapid tapping by checking time since last tip
-                                    let now = Date()
-                                    guard now.timeIntervalSince(lastTipTime) >= 0.2 else { return }
-                                    lastTipTime = now
-                                    
-                                    // Check balance first
-                                    if tipViewModel.balance < 0.01 {
-                                        showAddFundsAlert = true
-                                        return
-                                    }
-                                    
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                                        isHeartFilled = true
-                                        heartOpacity = 1.0
-                                        heartScale = 1.3
-                                        localTotalTips += 1
-                                        addTipBubble(amount: 1.0)
-                                    }
-                                    
-                                    // Reset scale after the spring animation
-                                    withAnimation(.easeOut(duration: 0.2).delay(0.3)) {
-                                        heartScale = 1.0
-                                    }
-                                    
-                                    // For archive videos, use "archive_user" as receiverID
-                                    let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
-                                    let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
-                                    
-                                    try await tipViewModel.sendMinimumTip(receiverID: receiverID, videoID: videoId)
-                                    
-                                    withAnimation {
-                                        showTippedText = true
-                                    }
-                                    
-                                    // Store the time of this tip animation
-                                    let currentTipTime = Date()
-                                    lastHeartResetTime = currentTipTime
-                                    
-                                    // Start fade out animations
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                        // Only proceed with fade out if there hasn't been a more recent tip
-                                        if currentTipTime == lastHeartResetTime {
-                                            withAnimation(.easeOut(duration: 0.5)) {
-                                                showTipBubble = false
-                                                showTippedText = false
-                                                heartOpacity = 0.3
-                                            }
-                                            
-                                            // Reset heart to unfilled state after fade only if no newer tips
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                                if currentTipTime == lastHeartResetTime {
-                                                    withAnimation(.easeOut(duration: 0.3)) {
-                                                        isHeartFilled = false
-                                                        heartOpacity = 1.0  // Return to full opacity
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch PaymentError.insufficientFunds {
-                                    withAnimation {
-                                        localTotalTips -= 1  // Revert if payment fails
-                                        isHeartFilled = false
-                                        heartOpacity = 0.3
-                                        heartScale = 1.0
-                                    }
-                                    showAddFundsAlert = true
-                                } catch {
-                                    withAnimation {
-                                        localTotalTips -= 1  // Revert if payment fails
-                                        isHeartFilled = false
-                                        heartOpacity = 0.3
-                                        heartScale = 1.0
-                                    }
-                                    showError = true
-                                    errorMessage = error.localizedDescription
-                                }
-                            }
-                        }) {
+                        Button(action: {}) {
                             VStack(spacing: 4) {
                                 Image(systemName: "heart\(isHeartFilled ? ".fill" : "")")
                                     .resizable()
@@ -791,18 +710,107 @@ struct VideoControlButtons: View {
                                     .shadow(radius: 1)
                             }
                         }
-                        .onLongPressGesture(minimumDuration: 0.2, perform: {}, onPressingChanged: { isPressing in
-                            if isPressing {
-                                // Start rapid tipping when long press begins
-                                let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
-                                let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
-                                tipViewModel.startRapidTipping(receiverID: receiverID, videoID: videoId) { amount in
-                                    withAnimation {
-                                        localTotalTips += 1  // Increment local total for each tip
-                                        addTipBubble(amount: 1.0)  // Always show 1¢ for each tip
+                        .highPriorityGesture(
+                            TapGesture()
+                                .onEnded { _ in
+                                    Task {
+                                        do {
+                                            // Prevent rapid tapping by checking time since last tip
+                                            let now = Date()
+                                            guard now.timeIntervalSince(lastTipTime) >= 0.2 else { return }
+                                            lastTipTime = now
+                                            
+                                            // Check balance first
+                                            if tipViewModel.balance < 0.01 {
+                                                showAddFundsAlert = true
+                                                return
+                                            }
+                                            
+                                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                                isHeartFilled = true
+                                                heartOpacity = 1.0
+                                                heartScale = 1.3
+                                                localTotalTips += 1
+                                                addTipBubble(amount: 1.0)
+                                            }
+                                            
+                                            // Reset scale after the spring animation
+                                            withAnimation(.easeOut(duration: 0.2).delay(0.3)) {
+                                                heartScale = 1.0
+                                            }
+                                            
+                                            // For archive videos, use "archive_user" as receiverID
+                                            let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
+                                            let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
+                                            
+                                            try await tipViewModel.sendMinimumTip(receiverID: receiverID, videoID: videoId)
+                                            
+                                            withAnimation {
+                                                showTippedText = true
+                                            }
+                                            
+                                            // Store the time of this tip animation
+                                            let currentTipTime = Date()
+                                            lastHeartResetTime = currentTipTime
+                                            
+                                            // Start fade out animations
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                                // Only proceed with fade out if there hasn't been a more recent tip
+                                                if currentTipTime == lastHeartResetTime {
+                                                    withAnimation(.easeOut(duration: 0.5)) {
+                                                        showTipBubble = false
+                                                        showTippedText = false
+                                                        heartOpacity = 0.3
+                                                    }
+                                                    
+                                                    // Reset heart to unfilled state after fade only if no newer tips
+                                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                                        if currentTipTime == lastHeartResetTime {
+                                                            withAnimation(.easeOut(duration: 0.3)) {
+                                                                isHeartFilled = false
+                                                                heartOpacity = 1.0  // Return to full opacity
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } catch PaymentError.insufficientFunds {
+                                            withAnimation {
+                                                localTotalTips -= 1  // Revert if payment fails
+                                                isHeartFilled = false
+                                                heartOpacity = 0.3
+                                                heartScale = 1.0
+                                            }
+                                            showAddFundsAlert = true
+                                        } catch {
+                                            withAnimation {
+                                                localTotalTips -= 1  // Revert if payment fails
+                                                isHeartFilled = false
+                                                heartOpacity = 0.3
+                                                heartScale = 1.0
+                                            }
+                                            errorMessage = error.localizedDescription
+                                            showError = true
+                                        }
                                     }
                                 }
-                            } else {
+                        )
+                        .simultaneousGesture(
+                            LongPressGesture(minimumDuration: 0.5)
+                                .onEnded { _ in
+                                    // Start rapid tipping when long press begins
+                                    let receiverID = video.isArchiveVideo ? "archive_user" : video.userID
+                                    let videoId = video.isArchiveVideo ? "archive_\(video.statsDocumentId)" : (video.id ?? "")
+                                    tipViewModel.startRapidTipping(receiverID: receiverID, videoID: videoId) { amount in
+                                        withAnimation {
+                                            localTotalTips += 1  // Increment local total for each tip
+                                            addTipBubble(amount: 1.0)  // Always show 1¢ for each tip
+                                        }
+                                    }
+                                }
+                        )
+                        .onLongPressGesture(minimumDuration: 0.2, perform: {}, onPressingChanged: { isPressing in
+                            if !isPressing {
                                 // Stop rapid tipping when long press ends
                                 tipViewModel.stopRapidTipping()
                             }

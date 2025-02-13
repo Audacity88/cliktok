@@ -147,7 +147,14 @@ struct AISearchView: View {
                         likes: 0,
                         views: 0
                     )
-                    NavigationLink(destination: VideoPlayerView(video: video, isVisible: .constant(true))) {
+                    NavigationLink(destination: VideoPlayerView(
+                        video: video,
+                        showBackButton: true,
+                        clearSearchOnDismiss: .constant(false),
+                        isVisible: .constant(true),
+                        showCreator: true
+                    )
+                    .environmentObject(feedViewModel)) {
                         VideoResultCard(video: archiveVideo)
                     }
                 }

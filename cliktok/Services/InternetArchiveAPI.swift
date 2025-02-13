@@ -1,54 +1,46 @@
 import Foundation
 import AVKit
 
+// Since ArchiveVideo is in the Models directory of the main target, we don't need to import it
+// The String+HTML extension is also in the main target's Extensions directory
+
 // Remove Models import since ArchiveVideo is in the main target
 // Remove Utilities import since Logger is in the main target
+
+// Import String extension for HTML cleaning
+// extension String {
+//     func cleaningHTMLTags() -> String {
+//         // Forward to the implementation in String+HTML.swift
+//         return self.cleaningHTMLTags()
+//     }
+// }
 
 // Import the ArchiveVideo model
 // import Models  // Remove this comment
 
 // Import ArchiveVideo model and String extension
-extension String {
-    /// Removes HTML tags and decodes HTML entities from a string
-    func cleaningHTMLTags() -> String {
-        // Remove HTML tags using regular expressions
-        let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: .caseInsensitive)
-        let range = NSRange(location: 0, length: self.utf16.count)
-        let cleanedText = regex?.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: "")
-        
-        // Decode HTML entities and return cleaned text
-        return cleanedText?
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? self
-    }
-}
-
-struct ArchiveVideo {
-    let id: String
-    let identifier: String
-    let title: String
-    let videoURL: String
-    let thumbnailURL: String?
-    let description: String?
+// struct ArchiveVideo {
+//     let id: String
+//     let identifier: String
+//     let title: String
+//     let videoURL: String
+//     let thumbnailURL: String?
+//     let description: String?
     
-    init(id: String = UUID().uuidString,
-         identifier: String,
-         title: String,
-         videoURL: String,
-         thumbnailURL: String? = nil,
-         description: String? = nil) {
-        self.id = id
-        self.identifier = identifier
-        self.title = title
-        self.videoURL = videoURL
-        self.thumbnailURL = thumbnailURL
-        self.description = description
-    }
-}
+//     init(id: String = UUID().uuidString,
+//          identifier: String,
+//          title: String,
+//          videoURL: String,
+//          thumbnailURL: String? = nil,
+//          description: String? = nil) {
+//         self.id = id
+//         self.identifier = identifier
+//         self.title = title
+//         self.videoURL = videoURL
+//         self.thumbnailURL = thumbnailURL
+//         self.description = description
+//     }
+// }
 
 struct InternetArchiveMetadata: Codable {
     let metadata: ArchiveMetadata

@@ -233,7 +233,6 @@ struct TerminalView: View {
                         showCreator: true
                     )
                     .environmentObject(feedViewModel)
-                    .environmentObject(tipViewModel)
                 }
             }
         }
@@ -542,39 +541,6 @@ struct TerminalView: View {
             isProcessing = true
             conversation.append((role: "system", content: "Finding random videos..."))
             
-            // Track already displayed results to avoid duplicates
-            var displayedResults = Set<String>()
-            var headerShown = false
-            
-            // Set up the callback for new results
-            aiService.onResultFound = { (video: ArchiveVideo) in
-                Task { @MainActor in
-                    if !displayedResults.contains(video.identifier) {
-                        displayedResults.insert(video.identifier)
-                        
-                        // Show header if this is the first result
-                        if !headerShown {
-                            conversation.append((role: "system", content: """
-                            ╔═══ RANDOM VIDEOS ═══╗
-                            Found random videos:
-                            ═══════════════════════
-                            """))
-                            headerShown = true
-                        }
-                        
-                        let result = """
-                        [\(displayedResults.count)] \(video.title)
-                        ├─ ID: \(video.identifier)
-                        ├─ Description: \(video.description?.prefix(100) ?? "No description")...
-                        └─ URL: \(video.videoURL)
-                        ───────────────────────
-                        """
-                        conversation.append((role: "system", content: result))
-                    }
-                }
-            }
-            
-            // Get random videos directly without using search
             do {
                 // Use a random sort and basic video filters
                 let randomQuery = """
@@ -589,30 +555,39 @@ struct TerminalView: View {
                     limit: 10
                 )
                 
-                // Process and display results
-                for video in results {
-                    await MainActor.run {
-                        aiService.onResultFound?(video)
+                // Store results in AISearchViewModel for play/view commands
+                aiService.searchResults = results
+                
+                // Show results
+                if results.isEmpty {
+                    conversation.append((role: "system", content: "No random videos found."))
+                } else {
+                    conversation.append((role: "system", content: """
+                    ╔═══ RANDOM VIDEOS ═══╗
+                    Found \(results.count) random videos:
+                    ═══════════════════════
+                    """))
+                    
+                    // Display each result
+                    for (index, video) in results.enumerated() {
+                        conversation.append((role: "system", content: """
+                        [\(index + 1)] \(video.title)
+                        ├─ ID: \(video.identifier)
+                        └─ Description: \(video.description?.prefix(100) ?? "No description")...
+                        """))
                     }
+                    
+                    // Show footer
+                    conversation.append((role: "system", content: """
+                    
+                    Commands:
+                    - play [number]: Play video
+                    - view [number]: Show full video info
+                    - random: Get new random videos
+                    """))
                 }
             } catch {
                 conversation.append((role: "system", content: "Error finding random videos: \(error.localizedDescription)"))
-            }
-            
-            // Clear the callback
-            aiService.onResultFound = nil
-            
-            if displayedResults.isEmpty {
-                conversation.append((role: "system", content: "No random videos found."))
-            } else {
-                // Show footer
-                conversation.append((role: "system", content: """
-                
-                Commands:
-                - play [ID]: Play video
-                - info [ID]: Show full video info
-                - random: Get new random videos
-                """))
             }
             
             isProcessing = false
