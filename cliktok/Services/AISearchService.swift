@@ -1,6 +1,7 @@
 import Foundation
 import OpenAI
 import Combine
+import os
 
 enum AISearchError: Error {
     case invalidAPIKey
@@ -29,10 +30,11 @@ actor AISearchService {
     private var client: OpenAI?
     static let shared = AISearchService()
     private var activeTasks: Set<UUID> = []
+    private let logger = Logger(component: "AISearchService")
     
     // Constants
     static let MAX_SEARCH_RESULTS = 10
-    static let MAX_TOKENS = 4096
+    static let MAX_TOKENS = 128000
     
     private init() {}
     
@@ -70,7 +72,7 @@ actor AISearchService {
         guard activeTasks.contains(taskId) else { throw AISearchError.cancelled }
         guard !videos.isEmpty else { return videos }
         
-        print("Starting ranking for \(videos.count) videos with query: \(query)")
+        logger.info("Starting ranking for \(videos.count) videos with query: \(query)")
         let client = try getClient()
         
         // Use GPT-3.5 for faster ranking
@@ -88,7 +90,7 @@ actor AISearchService {
         """
         
         // Process videos in smaller batches to stay within token limits
-        let BATCH_SIZE = 8 // Process 8 videos at a time to stay well under token limits
+        let BATCH_SIZE = 25  // Increased from 8 to 25 since we have more context window
         let videosToRank = Array(videos.prefix(AISearchService.MAX_SEARCH_RESULTS))
         var allRankedVideos: [(video: ArchiveVideo, score: Double)] = []
         
@@ -97,7 +99,7 @@ actor AISearchService {
             let batchEnd = min(batchStart + BATCH_SIZE, videosToRank.count)
             let batch = Array(videosToRank[batchStart..<batchEnd])
             
-            print("Processing batch \(batchStart/BATCH_SIZE + 1) with \(batch.count) videos")
+            logger.info("Processing batch \(batchStart/BATCH_SIZE + 1) with \(batch.count) videos")
             
             let batchInfo = batch.enumerated().map { index, video in
                 """
@@ -120,49 +122,49 @@ actor AISearchService {
             do {
                 guard let systemMessage = try? ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt),
                       let userMessage = try? ChatQuery.ChatCompletionMessageParam(role: .user, content: userContent) else {
-                    print("Failed to create chat messages")
+                    logger.error("Failed to create chat messages")
                     throw AISearchError.rankingFailed
                 }
                 
                 let chatQuery = ChatQuery(
                     messages: [systemMessage, userMessage],
-                    model: .gpt3_5Turbo
+                    model: .gpt4_turbo_preview
                 )
                 
-                print("Sending ranking request to GPT for batch \(batchStart/BATCH_SIZE + 1)")
+                logger.debug("Sending ranking request to GPT for batch \(batchStart/BATCH_SIZE + 1)")
                 let result = try await client.chats(query: chatQuery)
                 
                 guard case let .string(content) = result.choices.first?.message.content else {
-                    print("Error: No content in GPT response")
+                    logger.error("No content in GPT response")
                     throw AISearchError.rankingFailed
                 }
                 
-                print("Received GPT response: \(content)")
+                logger.debug("Received GPT response: \(content)")
                 
                 // Clean and parse the response
                 let cleanContent = content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                 let scoreStrings = cleanContent.split(separator: ",")
                 
-                print("Split response into \(scoreStrings.count) parts")
+                logger.debug("Split response into \(scoreStrings.count) parts")
                 
                 let scores = scoreStrings.compactMap { substring -> Double? in
                     let trimmed = substring.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                     guard let score = Double(trimmed) else {
-                        print("Failed to parse score: \(trimmed)")
+                        logger.error("Failed to parse score: \(trimmed)")
                         return nil
                     }
                     guard score >= 0 && score <= 100 else {
-                        print("Score out of range: \(score)")
+                        logger.error("Score out of range: \(score)")
                         return nil
                     }
                     return score
                 }
                 
-                print("Successfully parsed \(scores.count) scores")
+                logger.debug("Successfully parsed \(scores.count) scores")
                 
                 // Verify we have the correct number of scores for this batch
                 guard scores.count == batch.count else {
-                    print("Error: Score count (\(scores.count)) doesn't match batch size (\(batch.count))")
+                    logger.error("Error: Score count (\(scores.count)) doesn't match batch size (\(batch.count))")
                     throw AISearchError.rankingFailed
                 }
                 
@@ -170,10 +172,10 @@ actor AISearchService {
                 let batchResults = Array(zip(batch, scores))
                 allRankedVideos.append(contentsOf: batchResults)
                 
-                print("Added batch \(batchStart/BATCH_SIZE + 1) results")
+                logger.debug("Added batch \(batchStart/BATCH_SIZE + 1) results")
                 
             } catch {
-                print("Error processing batch \(batchStart/BATCH_SIZE + 1): \(error)")
+                logger.error("Error processing batch \(batchStart/BATCH_SIZE + 1): \(error)")
                 throw AISearchError.rankingFailed
             }
         }
@@ -183,12 +185,14 @@ actor AISearchService {
             .sorted { $0.score > $1.score }
             .map { $0.video }
         
-        print("Successfully ranked all \(rankedVideos.count) videos")
+        logger.info("Successfully ranked all \(rankedVideos.count) videos")
         
         // Print final rankings for debugging
+        logger.debug("=== FINAL RANKED RESULTS ===")
         for (index, result) in allRankedVideos.sorted(by: { $0.score > $1.score }).enumerated() {
-            print("Rank \(index + 1): \(result.video.title) (Score: \(result.score))")
+            logger.debug("Rank \(index + 1): \(result.video.title) (Score: \(result.score))")
         }
+        logger.debug("=========================")
         
         return rankedVideos
     }
@@ -271,38 +275,38 @@ actor AISearchService {
         // Create chat messages without optionals
         guard let systemMessage = try? ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt),
               let userMessage = try? ChatQuery.ChatCompletionMessageParam(role: .user, content: userContent) else {
-            print("Failed to create chat messages")
+            logger.error("Failed to create chat messages")
             throw AISearchError.processingFailed
         }
         
         let chatQuery = ChatQuery(
             messages: [systemMessage, userMessage],
-            model: .gpt3_5Turbo
+            model: .gpt4_turbo_preview
         )
         
         do {
             let result = try await client.chats(query: chatQuery)
             guard case let .string(content) = result.choices.first?.message.content else {
-                print("No content in GPT response")
+                logger.error("No content in GPT response")
                 throw AISearchError.processingFailed
             }
             
-            print("GPT Response: \(content)")
+            logger.debug("GPT Response: \(content)")
             
             // Try to extract JSON from the response (in case there's any extra text)
             guard let jsonStart = content.firstIndex(of: "{"),
                   let jsonEnd = content.lastIndex(of: "}") else {
-                print("No valid JSON found in response")
+                logger.error("No valid JSON found in response")
                 throw AISearchError.processingFailed
             }
             
             let jsonString = String(content[jsonStart...jsonEnd])
-            print("Extracted JSON: \(jsonString)")
+            logger.debug("Extracted JSON: \(jsonString)")
             
             // First parse as Any to handle null values
             guard let data = jsonString.data(using: .utf8),
                   let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                print("Failed to parse JSON as dictionary")
+                logger.error("Failed to parse JSON as dictionary")
                 throw AISearchError.processingFailed
             }
             
@@ -318,7 +322,7 @@ actor AISearchService {
                 }
             }
             
-            print("Parsed parameters: \(params)")
+            logger.debug("Parsed parameters: \(params)")
             
             // Build the Internet Archive query string
             var queryParts: [String] = []
@@ -349,11 +353,11 @@ actor AISearchService {
             }
             
             let finalQuery = queryParts.isEmpty ? query : queryParts.joined(separator: " AND ")
-            print("Final query: \(finalQuery)")
+            logger.debug("Final query: \(finalQuery)")
             
             return (query: finalQuery, filters: params)
         } catch {
-            print("Error processing query: \(error)")
+            logger.error("Error processing query: \(error)")
             throw AISearchError.processingFailed
         }
     }
