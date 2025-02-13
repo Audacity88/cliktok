@@ -2,6 +2,7 @@
 
 ## High Priority
 - [ ] Add age-dating functionality for videos in Submissions feed
+- [ ] Fix double tipping in search
 - [ ] Make tips and views persist on archive videos results
 - [ ] Allow persisting preferences
 - [ ] Predict your rating on search results

@@ -932,6 +932,9 @@ struct VideoPlayerView: View {
     @Binding var clearSearchOnDismiss: Bool
     @Binding var isVisible: Bool
     
+    // Add orientation state
+    @State private var orientation = UIDevice.current.orientation
+    
     // Add viewing time tracking
     @State private var viewingStartTime: Date?
     @State private var hasUpdatedStats = false
@@ -1170,7 +1173,7 @@ struct VideoPlayerView: View {
         
         // Filter tips for this video using the videoId
         let videoTips = tipViewModel.sentTips.filter { $0.videoID == videoId }
-        totalTips = Int(videoTips.reduce(0.0) { $0 + $1.amount } * 100) // Convert dollars to cents
+        totalTips = Int((videoTips.reduce(0.0) { $0 + $1.amount }) * 100) // Convert dollars to cents
         logger.debug("💰 Total tips for video \(videoId): \(totalTips)¢")
     }
     
@@ -1191,47 +1194,64 @@ struct VideoPlayerView: View {
                     geometry: geometry
                 )
                 
-                // UI Overlay
-                VideoOverlayContent(
-                    showBackButton: showBackButton,
-                    video: video,
-                    creator: creator,
-                    geometry: geometry,
-                    totalTips: totalTips,
-                    tipViewModel: tipViewModel,
-                    playerViewModel: playerViewModel,
-                    showCreator: showCreator,
-                    currentViewCount: currentViewCount,
-                    showTipBubble: $showTipBubble,
-                    showTippedText: $showTippedText,
-                    showAddFundsAlert: $showAddFundsAlert,
-                    showError: $showError,
-                    clearSearchOnDismiss: $clearSearchOnDismiss,
-                    showEditSheet: $showEditSheet,
-                    showDeleteAlert: $showDeleteAlert,
-                    onDismiss: {
-                        logger.debug("Dismissing video player")
-                        cleanupVideo()
-                        clearSearchOnDismiss = true
-                        dismiss()
-                    }
-                )
+                // UI Overlay - only show in portrait mode
+                if !orientation.isLandscape {
+                    VideoOverlayContent(
+                        showBackButton: showBackButton,
+                        video: video,
+                        creator: creator,
+                        geometry: geometry,
+                        totalTips: totalTips,
+                        tipViewModel: tipViewModel,
+                        playerViewModel: playerViewModel,
+                        showCreator: showCreator,
+                        currentViewCount: currentViewCount,
+                        showTipBubble: $showTipBubble,
+                        showTippedText: $showTippedText,
+                        showAddFundsAlert: $showAddFundsAlert,
+                        showError: $showError,
+                        clearSearchOnDismiss: $clearSearchOnDismiss,
+                        showEditSheet: $showEditSheet,
+                        showDeleteAlert: $showDeleteAlert,
+                        onDismiss: {
+                            logger.debug("Dismissing video player")
+                            cleanupVideo()
+                            clearSearchOnDismiss = true
+                            dismiss()
+                        }
+                    )
+                }
                 
-                // Status bar
-                RetroStatusBar()
-                    .frame(height: 44)
+                // Status bar - only show in portrait mode
+                if !orientation.isLandscape {
+                    RetroStatusBar()
+                        .frame(height: 44)
+                }
             }
             .navigationBarHidden(true)
             .edgesIgnoringSafeArea(.all)
-            .statusBar(hidden: true)  // Hide the system status bar
+            .statusBar(hidden: orientation.isLandscape)  // Hide system status bar in landscape
         }
         .onAppear {
             logger.debug("VideoPlayerView appeared")
             setupVideo()
+            // Start monitoring device orientation
+            NotificationCenter.default.addObserver(
+                forName: UIDevice.orientationDidChangeNotification,
+                object: nil,
+                queue: .main) { _ in
+                    orientation = UIDevice.current.orientation
+                }
         }
         .onDisappear {
             logger.debug("VideoPlayerView disappearing")
             cleanupVideo()
+            // Stop monitoring device orientation
+            NotificationCenter.default.removeObserver(
+                self,
+                name: UIDevice.orientationDidChangeNotification,
+                object: nil
+            )
         }
         .onChange(of: isVisible, perform: handleVisibilityChange)
         .onChange(of: showEditSheet, perform: handleEditSheetChange)
@@ -1246,8 +1266,10 @@ struct VideoPlayerView: View {
             updateTotalTips()
         }
         .sheet(isPresented: $showEditSheet) {
-            VideoEditView(video: video, isPresented: $showEditSheet)
-                .environmentObject(feedViewModel)
+            NavigationView {
+                VideoEditView(video: video, isPresented: $showEditSheet)
+                    .environmentObject(feedViewModel)
+            }
         }
         .alert("Add Funds", isPresented: $showAddFundsAlert) {
             Button("Add Funds") { showWallet = true }
@@ -1499,6 +1521,13 @@ struct ProgressBar: View {
             )
         }
         .frame(height: 20)
+    }
+}
+
+// Add extension to check landscape orientation
+extension UIDeviceOrientation {
+    var isLandscape: Bool {
+        return self == .landscapeLeft || self == .landscapeRight
     }
 }
 

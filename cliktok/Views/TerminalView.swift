@@ -327,15 +327,25 @@ struct TerminalView: View {
         Search Commands:
         ═══════════════
         
-        1. Basic Search:
+        1. Natural Language Search:
            search [query]
-           Example: search funny cats
+           Examples:
+           - search funny cat videos from the 90s
+           - search educational documentaries about space
+           - search classic movies from 1950 to 1960
+           - search viral dance videos from 2020s
         
         2. Trending Videos:
            trending
         
         3. Random Videos:
            random
+        
+        The AI will understand:
+        - Time periods (90s, 2000s, specific years)
+        - Content types (movies, documentaries)
+        - Genres (funny, educational, classic)
+        - Subjects (cats, space, dance)
         
         Results will show:
         - Title

@@ -47,26 +47,33 @@ class AISearchViewModel: ObservableObject {
         let callback = onResultFound
         
         do {
-            // Build search query based on searchQuery
+            // Process natural language query first
             let searchTerm = searchQuery.isEmpty ? "random" : searchQuery
+            let (processedQuery, filters) = try await aiService.processNaturalLanguageQuery(searchTerm, taskId: taskId)
+            
+            print("Original query: \(searchTerm)")
+            print("Processed query: \(processedQuery)")
+            print("Filters: \(filters)")
+            
+            // Build the final query string with media type restrictions
             let queryString = """
-            (title:"\(searchTerm)" OR description:"\(searchTerm)") AND \
+            (\(processedQuery)) AND \
             (mediatype:movies OR mediatype:movingimage) AND \
             -collection:test_videos AND \
             (format:mp4 OR format:h.264 OR format:512kb)
             """
             
-            print("Searching with query: \(queryString)")
+            print("Final search query: \(queryString)")
             
             // Search Internet Archive with multiple results
             let results = try await archiveAPI.fetchCollectionItems(
                 query: queryString,
                 offset: 0,
-                limit: 10
+                limit: 5 // Use same value as AISearchService.MAX_SEARCH_RESULTS
             )
             
             // Remove duplicates by identifier
-            let uniqueResults = Array(Dictionary(grouping: results, by: { $0.identifier }).values.map { $0[0] }.prefix(10))
+            let uniqueResults = Array(Dictionary(grouping: results, by: { $0.identifier }).values.map { $0[0] }.prefix(5))
             
             print("Found \(uniqueResults.count) unique initial results")
             
@@ -147,6 +154,9 @@ class AISearchViewModel: ObservableObject {
         } catch AISearchError.invalidAPIKey {
             errorMessage = "OpenAI API key not configured. Please check your environment variables."
             print("Invalid API key error")
+        } catch AISearchError.processingFailed {
+            errorMessage = "Failed to process your search query. Please try a different wording."
+            print("Query processing failed")
         } catch let error as AISearchError {
             errorMessage = error.localizedDescription
             print("AISearchError: \(error.localizedDescription)")
