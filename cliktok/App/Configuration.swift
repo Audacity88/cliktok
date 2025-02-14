@@ -29,9 +29,9 @@ enum Configuration {
     private static var cachedServerURL: URL?
     private static var serverDiscoveryTask: Task<URL, Swift.Error>?
     
-    static var defaultServerPort: Int { 8080 }
+    static var defaultServerPort: Int { 3000 }
     static var defaultServerURLs: [URL] = [
-        URL(string: "https://1ff1-24-153-157-38.ngrok-free.app")!,  // ngrok tunnel first
+        URL(string: "https://addf-24-153-157-38.ngrok-free.app")!,  // ngrok tunnel first
         URL(string: "http://10.10.2.1:\(defaultServerPort)")!  // Mac's en0 interface IP as fallback
     ]
     

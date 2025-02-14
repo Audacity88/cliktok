@@ -1,4 +1,8 @@
 import SwiftUI
+import os
+
+// Add logger instance
+private let logger = Logger(component: "AISearchView")
 
 struct AISearchView: View {
     @StateObject private var viewModel = AISearchViewModel()
@@ -7,6 +11,7 @@ struct AISearchView: View {
     @State private var searchMode: SearchMode = .ai
     @FocusState private var isSearchFocused: Bool
     @State private var hashtagSearchText: String = ""
+    @State private var isSearching = false
     
     enum SearchMode {
         case ai
@@ -14,44 +19,58 @@ struct AISearchView: View {
     }
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 20) {
-                // Search Mode Toggle
-                Picker("Search Mode", selection: $searchMode) {
-                    Text("AI Search").tag(SearchMode.ai)
-                    Text("Hashtag").tag(SearchMode.hashtag)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                
-                // Search Header
-                if searchMode == .ai {
-                    aiSearchHeader
+        VStack(spacing: 20) {
+            // Search Mode Toggle
+            Picker("Search Mode", selection: $searchMode) {
+                Text("AI Search").tag(SearchMode.ai)
+                Text("Hashtag").tag(SearchMode.hashtag)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .onChange(of: searchMode) { newMode in
+                logger.debug("Search mode changed to: \(newMode == .ai ? "AI" : "Hashtag")")
+                // Clear search results when switching modes
+                if newMode == .ai {
+                    feedViewModel.clearSearch()
+                    hashtagSearchText = ""
+                    Task {
+                        await viewModel.clearSearch()
+                    }
                 } else {
-                    hashtagSearchHeader
-                }
-                
-                // Results or Loading
-                Group {
-                    if viewModel.isLoading {
-                        loadingView
-                    } else if searchMode == .ai && !viewModel.searchResults.isEmpty {
-                        aiResultsView
-                    } else if searchMode == .hashtag && !feedViewModel.searchResults.isEmpty {
-                        hashtagResultsView
-                    } else if let error = viewModel.errorMessage {
-                        errorView(message: error)
-                    } else if let error = feedViewModel.searchError?.localizedDescription {
-                        errorView(message: error)
-                    } else {
-                        placeholderView
+                    viewModel.searchResults.removeAll()
+                    Task {
+                        await viewModel.clearSearch()
                     }
                 }
             }
-            .padding(.top)
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
+            
+            // Search Header
+            if searchMode == .ai {
+                aiSearchHeader
+            } else {
+                hashtagSearchHeader
+            }
+            
+            // Results or Loading
+            Group {
+                if isSearching || viewModel.isLoading {
+                    loadingView
+                } else if searchMode == .ai && !viewModel.searchResults.isEmpty {
+                    aiResultsView
+                } else if searchMode == .hashtag && !feedViewModel.searchResults.isEmpty {
+                    hashtagResultsView
+                } else if let error = viewModel.errorMessage {
+                    errorView(message: error)
+                } else if let error = feedViewModel.searchError?.localizedDescription {
+                    errorView(message: error)
+                } else {
+                    placeholderView
+                }
+            }
         }
+        .padding(.top)
+        .navigationTitle("Search")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     private var aiSearchHeader: some View {
@@ -64,13 +83,18 @@ struct AISearchView: View {
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .submitLabel(.search)
                     .onSubmit {
+                        logger.debug("Starting AI search for: \(viewModel.searchQuery)")
+                        isSearching = true
                         Task {
                             await viewModel.performSearch()
+                            isSearching = false
                         }
                     }
                 
                 if !viewModel.searchQuery.isEmpty {
                     Button(action: {
+                        viewModel.searchQuery = ""
+                        viewModel.searchResults.removeAll()
                         Task {
                             await viewModel.clearSearch()
                         }
@@ -101,14 +125,30 @@ struct AISearchView: View {
                     .submitLabel(.search)
                     .focused($isSearchFocused)
                     .onChange(of: hashtagSearchText) { newValue in
+                        logger.debug("Hashtag search text changed to: \(newValue)")
                         if newValue.isEmpty {
-                            feedViewModel.searchResults.removeAll()
+                            logger.debug("Clearing search results due to empty search")
+                            feedViewModel.clearSearch()
+                            isSearching = false
                         } else {
+                            logger.debug("Initiating hashtag search for: \(newValue)")
+                            isSearching = true
                             Task {
-                                await feedViewModel.searchVideos(hashtag: newValue)
+                                await performHashtagSearch(newValue)
                             }
                         }
                     }
+                
+                if !hashtagSearchText.isEmpty {
+                    Button(action: {
+                        hashtagSearchText = ""
+                        feedViewModel.clearSearch()
+                        isSearching = false
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.gray)
+                    }
+                }
             }
             .padding(.horizontal)
             
@@ -118,6 +158,13 @@ struct AISearchView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
+    }
+    
+    private func performHashtagSearch(_ query: String) async {
+        logger.debug("Starting search task for hashtag: \(query)")
+        await feedViewModel.searchVideos(hashtag: query)
+        isSearching = false
+        logger.debug("Search task completed. Results count: \(feedViewModel.searchResults.count)")
     }
     
     private var loadingView: some View {
@@ -131,40 +178,42 @@ struct AISearchView: View {
     }
     
     private var aiResultsView: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(viewModel.searchResults, id: \.id) { archiveVideo in
-                    let video = Video(
-                        id: nil,
-                        archiveIdentifier: archiveVideo.id,
-                        userID: "archive_user",
-                        videoURL: archiveVideo.videoURL,
-                        thumbnailURL: archiveVideo.thumbnailURL,
-                        caption: archiveVideo.title,
-                        description: archiveVideo.description,
-                        hashtags: ["archive"],
-                        createdAt: Date(),
-                        likes: 0,
-                        views: 0
-                    )
-                    NavigationLink(destination: VideoPlayerView(
-                        video: video,
-                        showBackButton: true,
-                        clearSearchOnDismiss: .constant(false),
-                        isVisible: .constant(true),
-                        showCreator: true
-                    )
-                    .environmentObject(feedViewModel)) {
-                        VideoResultCard(video: archiveVideo)
-                    }
-                }
-            }
-            .padding(.horizontal)
+        let videos = viewModel.searchResults.map { archiveVideo in
+            Video(
+                id: "ai_\(archiveVideo.identifier)",
+                archiveIdentifier: archiveVideo.identifier,
+                userID: "archive_user",
+                videoURL: archiveVideo.videoURL,
+                thumbnailURL: archiveVideo.thumbnailURL,
+                caption: archiveVideo.title,
+                description: archiveVideo.description,
+                hashtags: ["archive"],
+                createdAt: Date(),
+                likes: 0,
+                views: 0
+            )
         }
+        
+        return VideoGridView(
+            videos: videos,
+            showBackButton: true,
+            clearSearchOnDismiss: .constant(false)
+        )
+        .id(videos.count) // Force view refresh when results change
+        .environmentObject(feedViewModel)
     }
     
     private var hashtagResultsView: some View {
-        VideoGridView(videos: feedViewModel.searchResults)
+        VideoGridView(
+            videos: feedViewModel.searchResults,
+            showBackButton: true,
+            clearSearchOnDismiss: .constant(false)
+        )
+        .id(feedViewModel.searchResults.count) // Force view refresh when results change
+        .environmentObject(feedViewModel)
+        .onAppear {
+            logger.debug("Hashtag results view appeared with \(feedViewModel.searchResults.count) videos")
+        }
     }
     
     private func errorView(message: String) -> some View {
@@ -190,33 +239,6 @@ struct AISearchView: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(.gray)
         }
-    }
-}
-
-struct VideoResultCard: View {
-    let video: ArchiveVideo
-    @Environment(\.colorScheme) private var colorScheme
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(video.title)
-                .font(.headline)
-                .lineLimit(2)
-            
-            if let description = video.description {
-                Text(description)
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-                    .lineLimit(3)
-            }
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(colorScheme == .dark ? Color(.systemGray6) : .white)
-                .shadow(radius: 2)
-        )
     }
 }
 

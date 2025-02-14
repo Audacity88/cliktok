@@ -2,30 +2,25 @@
 
 ## High Priority
 - [ ] Add age-dating functionality for videos in Submissions feed
-- [ ] Fix double tipping in search
-- [ ] Clean tags in description
+- [x] Fix double tipping in search
+- [x] Clean tags in description
 - [ ] Make tips and views persist on archive videos results
 - [ ] Allow persisting preferences
 - [ ] Predict your rating on search results
 - [ ] Complete terminal interface integration
   - [ ] Add video preview capability in terminal responses
-  - [ ] Implement direct video playback from terminal
-  - [ ] Add more terminal commands (e.g., 'play', 'info', 'stats')
+  - [x] Implement direct video playback from terminal
 - [ ] Enhance retro UI elements
-  - [ ] Fix position of blinking cursor
-  - [ ] Add CRT screen effect
-  - [ ] Add typing sound effects
-  - [ ] Add screen flicker effect
   - [ ] Add command history navigation (up/down arrows)
 - [ ] Views
   - [ ] Add my tipped videos
-  - [ ] Home/collections
+  - [x] Home/collections
   - [ ] Swipe up/down through search
 ## Features
 - [ ] Terminal Commands
   - [ ] Add 'watch' command to directly play videos
-  - [ ] Add 'search' command with advanced filters
-  - [ ] Add 'random' command for random video suggestions
+  - [x] Add 'search' command with advanced filters
+  - [x] Add 'random' command for random video suggestions
   - [ ] Add 'trending' command for popular videos
 - [ ] AI Integration
   - [ ] Improve video recommendation accuracy

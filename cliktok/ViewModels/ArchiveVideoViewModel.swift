@@ -19,6 +19,7 @@ class ArchiveVideoViewModel: ObservableObject {
     private var lastLoadDirection: LoadDirection = .forward
     private var videoCache: [String: [ArchiveVideo]] = [:]
     private var preloadTask: Task<Void, Never>?
+    private var activeTasks: Set<Task<Void, Never>> = []
     
     enum LoadDirection {
         case forward
@@ -222,56 +223,66 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     private func updateCollectionVideos(_ collection: ArchiveCollection, videos: [ArchiveVideo], range: Range<Int>) async {
-        guard let index = collections.firstIndex(where: { $0.id == collection.id }) else { return }
-        
-        var updatedCollection = collections[index]
-        
-        // Ensure the videos array is large enough
-        while updatedCollection.videos.count < range.upperBound {
-            updatedCollection.videos.append(contentsOf: Array(repeating: ArchiveVideo(
-                id: UUID().uuidString,
-                title: "",
-                videoURL: "",
-                thumbnailURL: nil,
-                description: nil
-            ), count: range.upperBound - updatedCollection.videos.count))
-        }
-        
-        // Update videos at the correct indices
-        for (offset, video) in videos.enumerated() {
-            let targetIndex = range.lowerBound + offset
-            if targetIndex < updatedCollection.videos.count {
-                updatedCollection.videos[targetIndex] = video
+        await MainActor.run { [weak self] in
+            guard let self = self else { return }
+            guard let index = collections.firstIndex(where: { $0.id == collection.id }) else { return }
+            
+            var updatedCollection = collections[index]
+            
+            // Ensure the videos array is large enough
+            while updatedCollection.videos.count < range.upperBound {
+                updatedCollection.videos.append(contentsOf: Array(repeating: ArchiveVideo(
+                    id: UUID().uuidString,
+                    title: "",
+                    videoURL: "",
+                    thumbnailURL: nil,
+                    description: nil
+                ), count: range.upperBound - updatedCollection.videos.count))
             }
+            
+            // Update videos at the correct indices
+            for (offset, video) in videos.enumerated() {
+                let targetIndex = range.lowerBound + offset
+                if targetIndex < updatedCollection.videos.count {
+                    updatedCollection.videos[targetIndex] = video
+                }
+            }
+            
+            collections[index] = updatedCollection
+            if selectedCollection?.id == collection.id {
+                selectedCollection = updatedCollection
+            }
+            
+            // Mark range as loaded
+            var ranges = loadedRanges[collection.id] ?? Set<Range<Int>>()
+            ranges.insert(range)
+            loadedRanges[collection.id] = ranges
         }
-        
-        collections[index] = updatedCollection
-        if selectedCollection?.id == collection.id {
-            selectedCollection = updatedCollection
-        }
-        
-        // Mark range as loaded
-        var ranges = loadedRanges[collection.id] ?? Set<Range<Int>>()
-        ranges.insert(range)
-        loadedRanges[collection.id] = ranges
     }
     
     private func prefetchAssetsForVideos(_ videos: ArraySlice<ArchiveVideo>) async {
-        await withTaskGroup(of: Void.self) { group in
-            for video in videos {
-                group.addTask {
-                    if let url = URL(string: video.videoURL) {
-                        await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .low)
+        let task = Task { [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                for video in videos {
+                    guard !Task.isCancelled else { break }
+                    
+                    group.addTask { [weak self] in
+                        guard self != nil else { return }
+                        if let url = URL(string: video.videoURL) {
+                            await VideoAssetLoader.shared.prefetchWithPriority(for: url, priority: .low)
+                        }
                     }
-                }
-                
-                if let thumbnailURL = URL(string: InternetArchiveAPI.getThumbnailURL(identifier: video.id).absoluteString) {
-                    group.addTask {
-                        await ImageCache.shared.prefetchImages([thumbnailURL])
+                    
+                    if let thumbnailURL = URL(string: InternetArchiveAPI.getThumbnailURL(identifier: video.id).absoluteString) {
+                        group.addTask { [weak self] in
+                            guard self != nil else { return }
+                            await ImageCache.shared.prefetchImages([thumbnailURL])
+                        }
                     }
                 }
             }
         }
+        activeTasks.insert(task)
     }
     
     func loadMoreVideosIfNeeded(for collection: ArchiveCollection, currentIndex: Int) async {
@@ -299,36 +310,26 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     func preloadCollections() {
-        // Cancel any existing preload task
-        preloadTask?.cancel()
+        guard preloadTask == nil else { return }
         
-        preloadTask = Task {
-            // First, preload only essential collection thumbnails
-            let essentialCollections = collections.prefix(3)
-            let thumbnailURLs = essentialCollections.compactMap { collection in
-                URL(string: InternetArchiveAPI.getThumbnailURL(identifier: collection.id).absoluteString)
-            }
-            await ImageCache.shared.prefetchImages(thumbnailURLs)
+        preloadTask = Task { [weak self] in
+            guard let self = self else { return }
             
-            // Then preload first video from each essential collection
-            for collection in essentialCollections {
+            for collection in collections where collection.id != "test_videos" {
                 guard !Task.isCancelled else { break }
                 
                 do {
-                    // Add increasing delay between collections
-                    if let index = collections.firstIndex(of: collection), index > 0 {
-                        try await Task.sleep(nanoseconds: UInt64(index) * 1_000_000_000) // 1 second delay per collection
-                    }
-                    
                     let videos = try await api.fetchCollectionItems(
                         identifier: collection.id,
                         offset: 0,
                         limit: 1
                     )
                     
-                    // Cache the video metadata
+                    guard !Task.isCancelled else { break }
+                    
                     if let index = self.collections.firstIndex(where: { $0.id == collection.id }) {
-                        await MainActor.run {
+                        await MainActor.run { [weak self] in
+                            guard let self = self else { return }
                             var updatedCollection = self.collections[index]
                             updatedCollection.videos = videos
                             self.collections[index] = updatedCollection
@@ -341,9 +342,10 @@ class ArchiveVideoViewModel: ObservableObject {
                         
                         // Preload video thumbnail with low priority
                         if let videoThumbnailURL = URL(string: videos.first?.thumbnailURL ?? "") {
-                            Task.detached(priority: .background) {
+                            let thumbnailTask = Task.detached(priority: .background) {
                                 await ImageCache.shared.prefetchImages([videoThumbnailURL])
                             }
+                            activeTasks.insert(thumbnailTask)
                         }
                     }
                 } catch {
@@ -355,13 +357,39 @@ class ArchiveVideoViewModel: ObservableObject {
     
     // Make this nonisolated so it can be called from deinit
     nonisolated func cancelPreloading() {
-        Task { @MainActor in
-            preloadTask?.cancel()
-            preloadTask = nil
+        Task { @MainActor [weak self] in
+            await self?.cleanup()
         }
     }
     
     deinit {
-        cancelPreloading()
+        // Cancel tasks immediately in deinit
+        Task { @MainActor [weak self] in
+            await self?.cleanup()
+        }
+    }
+    
+    // Make cleanup nonisolated and handle actor-isolated operations properly
+    nonisolated private func cleanup() async {
+        await MainActor.run { [self] in
+            // Cancel all active tasks
+            activeTasks.forEach { $0.cancel() }
+            activeTasks.removeAll()
+            
+            // Cancel all prefetch tasks
+            prefetchTasks.values.forEach { $0.cancel() }
+            prefetchTasks.removeAll()
+            
+            // Cancel preload task
+            preloadTask?.cancel()
+            preloadTask = nil
+            
+            // Clear caches
+            videoCache.removeAll()
+            loadedRanges.removeAll()
+        }
+        
+        // Clear API caches (this is already actor-isolated)
+        await api.clearCaches()
     }
 }

@@ -1,6 +1,24 @@
 import SwiftUI
 import PhotosUI
 import FirebaseAuth
+import FirebaseFirestore
+import os
+
+// Add logger instance
+private let logger = Logger(component: "ProfileView")
+
+// Make Tip equatable
+extension Tip: Equatable {
+    static func == (lhs: Tip, rhs: Tip) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.amount == rhs.amount &&
+        lhs.timestamp == rhs.timestamp &&
+        lhs.videoID == rhs.videoID &&
+        lhs.senderID == rhs.senderID &&
+        lhs.receiverID == rhs.receiverID &&
+        lhs.transactionID == rhs.transactionID
+    }
+}
 
 struct ProfileView: View {
     @StateObject private var viewModel = UserViewModel()
@@ -160,6 +178,10 @@ struct ProfileContentView: View {
     @Binding var selectedItem: PhotosPickerItem?
     @Binding var selectedImageData: Data?
     @ObservedObject var viewModel: UserViewModel
+    @StateObject private var tipViewModel = TipViewModel.shared
+    @State private var selectedTab = 0
+    @State private var tippedVideos: [Video] = []
+    @State private var isLoadingTippedVideos = false
     
     var body: some View {
         ScrollView {
@@ -267,27 +289,113 @@ struct ProfileContentView: View {
                     }
                 }
                 
-                // Videos Grid
-                if !viewModel.userVideos.isEmpty {
-                    VideoGridView(videos: viewModel.userVideos, showBackButton: false)
+                // Videos Tabs
+                Picker("Content", selection: $selectedTab) {
+                    Text("Videos").tag(0)
+                    Text("Tipped").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                
+                if selectedTab == 0 {
+                    // User Videos
+                    if !viewModel.userVideos.isEmpty {
+                        VideoGridView(videos: viewModel.userVideos, showBackButton: false)
+                    } else {
+                        VStack(spacing: 16) {
+                            Image(systemName: "film")
+                                .font(.system(size: 48))
+                                .foregroundColor(.gray)
+                            Text("No videos yet")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                            if isCurrentUser {
+                                Text("Start sharing your first video!")
+                                    .font(.subheadline)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: 200)
+                    }
                 } else {
-                    VStack(spacing: 16) {
-                        Image(systemName: "film")
-                            .font(.system(size: 48))
-                            .foregroundColor(.gray)
-                        Text("No videos yet")
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                        if isCurrentUser {
-                            Text("Start sharing your first video!")
+                    // Tipped Videos
+                    if isLoadingTippedVideos {
+                        ProgressView()
+                            .frame(maxWidth: .infinity, maxHeight: 200)
+                    } else if !tippedVideos.isEmpty {
+                        VideoGridView(videos: tippedVideos, showBackButton: false)
+                    } else {
+                        VStack(spacing: 16) {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 48))
+                                .foregroundColor(.gray)
+                            Text("No tipped videos yet")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                            Text("Support creators by tipping their videos!")
                                 .font(.subheadline)
                                 .foregroundColor(.gray)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: 200)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: 200)
                 }
             }
         }
+        .task {
+            await tipViewModel.loadTipHistory()
+            await loadTippedVideos()
+        }
+        .onChange(of: tipViewModel.sentTips) { _ in
+            Task {
+                await loadTippedVideos()
+            }
+        }
+    }
+    
+    private func loadTippedVideos() async {
+        guard !tipViewModel.sentTips.isEmpty else {
+            tippedVideos = []
+            return
+        }
+        
+        isLoadingTippedVideos = true
+        defer { isLoadingTippedVideos = false }
+        
+        // Get unique video IDs from sent tips
+        let uniqueVideoIds = Set(tipViewModel.sentTips.map { $0.videoID })
+        var loadedVideos: [Video] = []
+        
+        for videoId in uniqueVideoIds {
+            if videoId.hasPrefix("archive_") {
+                let archiveId = String(videoId.dropFirst(8))
+                let video = Video(
+                    id: nil,
+                    archiveIdentifier: archiveId,
+                    userID: "archive_user",
+                    videoURL: InternetArchiveAPI.getVideoURL(identifier: archiveId),
+                    thumbnailURL: InternetArchiveAPI.getThumbnailURL(identifier: archiveId).absoluteString,
+                    caption: "Archive Video",
+                    description: nil,
+                    hashtags: ["archive"],
+                    createdAt: Date(),
+                    likes: 0,
+                    views: 0
+                )
+                loadedVideos.append(video)
+            } else {
+                let db = Firestore.firestore()
+                do {
+                    let document = try await db.collection("videos").document(videoId).getDocument()
+                    if let video = try? document.data(as: Video.self) {
+                        loadedVideos.append(video)
+                    }
+                } catch {
+                    logger.error("Error fetching video \(videoId): \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        tippedVideos = loadedVideos
     }
 }
 

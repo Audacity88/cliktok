@@ -180,6 +180,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     
     func loadAndPlayVideo() async {
         logger.info("🎬 [\(videoIdentifier)] Starting loadAndPlayVideo")
+        let startTime = Date()
         
         // Prevent multiple concurrent loads
         if isLoadingTask != nil {
@@ -212,8 +213,10 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     let idComponents = components[1].components(separatedBy: "/")
                     if let identifier = idComponents.first {
                         do {
+                            let resolveStartTime = Date()
                             // Try to get the actual video URL
                             let actualURL = try await InternetArchiveAPI.getActualVideoURL(identifier: identifier)
+                            logger.performance("🔄 [\(videoIdentifier)] URL resolution took \(Date().timeIntervalSince(resolveStartTime))s")
                             logger.debug("🔄 [\(videoIdentifier)] Using actual video URL: \(actualURL)")
                             finalURLString = actualURL
                         } catch {
@@ -230,7 +233,6 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             }
             
             logger.info("🎥 [\(videoIdentifier)] Starting to load video from URL: \(url), isVisible: \(isVisible)")
-            let startTime = Date()
             
             await MainActor.run {
                 isLoadingVideo = true
@@ -238,9 +240,11 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             }
             
             do {
+                let assetStartTime = Date()
                 // Check cache first
                 if let cachedAsset = assetCache.object(forKey: url as NSURL) {
                     logger.debug("📦 [\(videoIdentifier)] Using cached asset")
+                    logger.performance("⚡️ [\(videoIdentifier)] Asset cache hit in \(Date().timeIntervalSince(assetStartTime))s")
                     await configurePlayer(with: cachedAsset)
                     return
                 }
@@ -249,13 +253,16 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                 if let existingTask = loadingAssets[url] {
                     logger.debug("⏳ [\(videoIdentifier)] Using existing loading task")
                     let asset = try await existingTask.value
+                    logger.performance("⚡️ [\(videoIdentifier)] Asset loaded from existing task in \(Date().timeIntervalSince(assetStartTime))s")
                     await configurePlayer(with: asset)
                     return
                 }
                 
                 // Create new loading task
                 let loadingTask = Task<AVAsset, Error> {
+                    let assetCreationTime = Date()
                     let asset = AVURLAsset(url: url)
+                    logger.performance("⚡️ [\(videoIdentifier)] Asset creation took \(Date().timeIntervalSince(assetCreationTime))s")
                     
                     // Configure asset based on current quality setting
                     let resourceLoader = asset.resourceLoader
@@ -267,10 +274,14 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     ] as [String: Any]
                     
                     // Load essential properties first
+                    let metadataStartTime = Date()
                     try await loadInitialMetadata(for: asset)
+                    logger.performance("⚡️ [\(videoIdentifier)] Metadata loading took \(Date().timeIntervalSince(metadataStartTime))s")
                     
                     // Cache the asset
+                    let cacheStartTime = Date()
                     assetCache.setObject(asset, forKey: url as NSURL)
+                    logger.performance("⚡️ [\(videoIdentifier)] Asset caching took \(Date().timeIntervalSince(cacheStartTime))s")
                     
                     return asset
                 }
@@ -279,6 +290,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                 
                 let asset = try await loadingTask.value
                 loadingAssets[url] = nil
+                logger.performance("⚡️ [\(videoIdentifier)] Total asset loading took \(Date().timeIntervalSince(assetStartTime))s")
                 
                 await configurePlayer(with: asset)
                 
@@ -291,6 +303,8 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
                     isLoadingVideo = false
                 }
             }
+            
+            logger.performance("⚡️ [\(videoIdentifier)] Total video loading process took \(Date().timeIntervalSince(startTime))s")
         }
         
         // Wait for the loading task to complete
@@ -307,31 +321,38 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
     @MainActor
     private func configurePlayer(with asset: AVAsset) async {
         logger.debug("🔧 [\(videoIdentifier)] Configuring player with asset")
+        let configStartTime = Date()
         
         do {
             // Load duration asynchronously before creating player item
+            let durationStartTime = Date()
             let durationValue = try await asset.load(.duration)
             let durationSeconds = CMTimeGetSeconds(durationValue)
+            logger.performance("⚡️ [\(videoIdentifier)] Duration loading took \(Date().timeIntervalSince(durationStartTime))s")
             
             // Create player item with optimized settings
+            let itemStartTime = Date()
             let playerItem = AVPlayerItem(asset: asset)
             playerItem.preferredForwardBufferDuration = 2
             playerItem.automaticallyPreservesTimeOffsetFromLive = false
             
             // Add error handling for playback issues
             playerItem.addObserver(self, forKeyPath: #keyPath(AVPlayerItem.status), options: [.new, .old], context: nil)
+            logger.performance("⚡️ [\(videoIdentifier)] Player item creation took \(Date().timeIntervalSince(itemStartTime))s")
             
             // Set duration first
             if durationSeconds.isFinite {
                 self.duration = durationSeconds
             }
             
+            let playerStartTime = Date()
             let newPlayer = AVPlayer(playerItem: playerItem)
             newPlayer.automaticallyWaitsToMinimizeStalling = false
             newPlayer.isMuted = isMuted
             newPlayer.volume = 1.0
             
             setupTimeObserver(for: newPlayer)
+            logger.performance("⚡️ [\(videoIdentifier)] Player creation and setup took \(Date().timeIntervalSince(playerStartTime))s")
             
             self.player = newPlayer
             self.isValidForPlayback = true
@@ -349,6 +370,7 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             }
             
             isLoadingVideo = false
+            logger.performance("⚡️ [\(videoIdentifier)] Total player configuration took \(Date().timeIntervalSince(configStartTime))s")
             
         } catch {
             logger.error("❌ [\(videoIdentifier)] Error configuring player: \(error.localizedDescription)")
@@ -645,14 +667,18 @@ class VideoPlayerViewModel: NSObject, ObservableObject {
             "playable"
         ]
         
+        let propertiesStartTime = Date()
         // Load essential properties in parallel
         try await asset.loadValues(forKeys: essentialLoadingKeys)
+        logger.performance("⚡️ [\(videoIdentifier)] Essential properties loaded in \(Date().timeIntervalSince(propertiesStartTime))s")
         
         // Load tracks in parallel with optimized loading
+        let tracksStartTime = Date()
         async let videoTrackTask = try await asset.loadTracks(withMediaType: .video)
         async let audioTrackTask = try await asset.loadTracks(withMediaType: .audio)
         
         let (videoTracks, audioTracks) = try await (videoTrackTask, audioTrackTask)
+        logger.performance("⚡️ [\(videoIdentifier)] Tracks loaded in \(Date().timeIntervalSince(tracksStartTime))s")
         
         guard let videoTrack = videoTracks.first else {
             logger.error("❌ [\(videoIdentifier)] No video track found in asset")

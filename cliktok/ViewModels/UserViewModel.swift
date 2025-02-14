@@ -202,15 +202,17 @@ class UserViewModel: ObservableObject {
                 let data = document.data()
                 return Video(
                     id: document.documentID,
+                    archiveIdentifier: nil,
                     userID: data["user_id"] as? String ?? "",
                     videoURL: data["video_url"] as? String ?? "",
                     thumbnailURL: data["thumbnail_url"] as? String,
                     caption: data["caption"] as? String ?? "",
+                    description: data["description"] as? String,
                     hashtags: data["hashtags"] as? [String] ?? [],
                     createdAt: (data["created_at"] as? Timestamp)?.dateValue() ?? Date(),
                     likes: data["likes"] as? Int ?? 0,
                     views: data["views"] as? Int ?? 0,
-                    isAdvertisement: data["is_advertisement"] as? Bool ?? false
+                    isAdvertisement: data["is_advertisement"] as? Bool
                 )
             }
         } catch {

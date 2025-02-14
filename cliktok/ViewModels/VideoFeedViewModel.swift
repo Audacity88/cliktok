@@ -1,6 +1,7 @@
 import Foundation
 import FirebaseFirestore
 import Combine
+import os
 
 @MainActor
 class VideoFeedViewModel: ObservableObject {
@@ -15,6 +16,7 @@ class VideoFeedViewModel: ObservableObject {
     private var lastDocument: DocumentSnapshot?
     private let pageSize = 5
     private let db = Firestore.firestore()
+    private let logger = Logger(component: "VideoFeedViewModel")
     
     // Archive user for Internet Archive videos
     private let archiveUser = User(
@@ -36,116 +38,116 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     private func fetchVideoStats(for videos: [Video]) async {
-        print("VideoFeedViewModel: -------- Starting Stats Fetch --------")
-        print("VideoFeedViewModel: Total videos to fetch stats for: \(videos.count)")
-        print("VideoFeedViewModel: Video IDs: \(videos.map { $0.stableId }.joined(separator: ", "))")
+        logger.info("-------- Starting Stats Fetch --------")
+        logger.info("Total videos to fetch stats for: \(videos.count)")
+        logger.debug("Video IDs: \(videos.map { $0.stableId }.joined(separator: ", "))")
         
         // Group videos by type (archive vs regular)
         let archiveVideos = videos.filter { $0.isArchiveVideo }
         let regularVideos = videos.filter { !$0.isArchiveVideo }
-        print("VideoFeedViewModel: Found \(archiveVideos.count) archive videos and \(regularVideos.count) regular videos")
+        logger.info("Found \(archiveVideos.count) archive videos and \(regularVideos.count) regular videos")
         
         // Fetch archive video stats
         if !archiveVideos.isEmpty {
             let archiveIds = archiveVideos.map { $0.statsDocumentId }
-            print("VideoFeedViewModel: Fetching archive stats for IDs: \(archiveIds.joined(separator: ", "))")
+            logger.debug("Fetching archive stats for IDs: \(archiveIds.joined(separator: ", "))")
             
             do {
                 let snapshot = try await db.collection("archive_video_stats")
                     .whereField(FieldPath.documentID(), in: archiveIds)
                     .getDocuments()
                 
-                print("VideoFeedViewModel: Retrieved \(snapshot.documents.count) archive stat documents")
+                logger.debug("Retrieved \(snapshot.documents.count) archive stat documents")
                 
                 let stats = snapshot.documents.reduce(into: [String: [String: Any]]()) { dict, doc in
                     dict[doc.documentID] = doc.data()
                 }
-                print("VideoFeedViewModel: Parsed stats data: \(stats)")
+                logger.debug("Parsed stats data: \(stats)")
                 
                 // Update archive video views in both arrays
                 for video in archiveVideos {
-                    print("VideoFeedViewModel: Processing archive video: \(video.stableId)")
+                    logger.debug("Processing archive video: \(video.stableId)")
                     if let videoStats = stats[video.statsDocumentId] {
                         let views = videoStats["views"] as? Int ?? 0
-                        print("VideoFeedViewModel: Found stats for \(video.stableId) - views: \(views)")
+                        logger.debug("Found stats for \(video.stableId) - views: \(views)")
                         
                         // Update in main videos array
                         if let index = self.videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                            print("VideoFeedViewModel: Updating main array at index \(index)")
+                            logger.debug("Updating main array at index \(index)")
                             self.videos[index].views = views
                         } else {
-                            print("VideoFeedViewModel: Video not found in main array")
+                            logger.debug("Video not found in main array")
                         }
                         
                         // Update in search results array
                         if let index = self.searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                            print("VideoFeedViewModel: Updating search results at index \(index)")
+                            logger.debug("Updating search results at index \(index)")
                             self.searchResults[index].views = views
                         } else {
-                            print("VideoFeedViewModel: Video not found in search results")
+                            logger.debug("Video not found in search results")
                         }
                     } else {
-                        print("VideoFeedViewModel: No stats found for archive video: \(video.stableId)")
+                        logger.warning("No stats found for archive video: \(video.stableId)")
                     }
                 }
             } catch {
-                print("VideoFeedViewModel: Error fetching archive stats: \(error)")
-                print("VideoFeedViewModel: Full error details: \(error)")
+                logger.error("Error fetching archive stats: \(error)")
+                logger.error("Full error details: \(error)")
             }
         }
         
         // Fetch regular video stats
         if !regularVideos.isEmpty {
             let regularIds = regularVideos.map { $0.statsDocumentId }
-            print("VideoFeedViewModel: Fetching regular stats for IDs: \(regularIds.joined(separator: ", "))")
+            logger.debug("Fetching regular stats for IDs: \(regularIds.joined(separator: ", "))")
             
             do {
                 let snapshot = try await db.collection("video_stats")
                     .whereField(FieldPath.documentID(), in: regularIds)
                     .getDocuments()
                 
-                print("VideoFeedViewModel: Retrieved \(snapshot.documents.count) regular stat documents")
+                logger.debug("Retrieved \(snapshot.documents.count) regular stat documents")
                 
                 let stats = snapshot.documents.reduce(into: [String: [String: Any]]()) { dict, doc in
                     dict[doc.documentID] = doc.data()
                 }
-                print("VideoFeedViewModel: Parsed stats data: \(stats)")
+                logger.debug("Parsed stats data: \(stats)")
                 
                 // Update regular video views in both arrays
                 for video in regularVideos {
-                    print("VideoFeedViewModel: Processing regular video: \(video.stableId)")
+                    logger.debug("Processing regular video: \(video.stableId)")
                     if let videoStats = stats[video.statsDocumentId] {
                         let views = videoStats["views"] as? Int ?? 0
-                        print("VideoFeedViewModel: Found stats for \(video.stableId) - views: \(views)")
+                        logger.debug("Found stats for \(video.stableId) - views: \(views)")
                         
                         // Update in main videos array
                         if let index = self.videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                            print("VideoFeedViewModel: Updating main array at index \(index)")
+                            logger.debug("Updating main array at index \(index)")
                             self.videos[index].views = views
                         } else {
-                            print("VideoFeedViewModel: Video not found in main array")
+                            logger.debug("Video not found in main array")
                         }
                         
                         // Update in search results array
                         if let index = self.searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                            print("VideoFeedViewModel: Updating search results at index \(index)")
+                            logger.debug("Updating search results at index \(index)")
                             self.searchResults[index].views = views
                         } else {
-                            print("VideoFeedViewModel: Video not found in search results")
+                            logger.debug("Video not found in search results")
                         }
                     } else {
-                        print("VideoFeedViewModel: No stats found for regular video: \(video.stableId)")
+                        logger.warning("No stats found for regular video: \(video.stableId)")
                     }
                 }
             } catch {
-                print("VideoFeedViewModel: Error fetching regular stats: \(error)")
-                print("VideoFeedViewModel: Full error details: \(error)")
+                logger.error("Error fetching regular stats: \(error)")
+                logger.error("Full error details: \(error)")
             }
         }
         
-        print("VideoFeedViewModel: -------- Stats Fetch Complete --------")
-        print("VideoFeedViewModel: Final video array views: \(self.videos.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
-        print("VideoFeedViewModel: Final search results views: \(self.searchResults.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
+        logger.info("-------- Stats Fetch Complete --------")
+        logger.debug("Final video array views: \(self.videos.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
+        logger.debug("Final search results views: \(self.searchResults.map { "\($0.stableId): \($0.views)" }.joined(separator: ", "))")
     }
     
     func loadInitialVideos() async {
@@ -206,7 +208,7 @@ class VideoFeedViewModel: ObservableObject {
     
     public func fetchCreators(for videos: [Video]) async {
         let creatorIds = Set(videos.map { $0.userID })
-        print("Fetching creators for IDs: \(creatorIds)")
+        logger.debug("Fetching creators for IDs: \(creatorIds)")
         
         for creatorId in creatorIds {
             if videoCreators[creatorId] == nil {
@@ -214,14 +216,14 @@ class VideoFeedViewModel: ObservableObject {
                     let docSnapshot = try await db.collection("users").document(creatorId).getDocument()
                     if docSnapshot.exists {
                         if let user = try? docSnapshot.data(as: User.self) {
-                            print("Successfully loaded creator: \(user.displayName)")
+                            logger.success("Successfully loaded creator: \(user.displayName)")
                             videoCreators[creatorId] = user
                         }
                     } else {
-                        print("No document found for creator ID: \(creatorId)")
+                        logger.warning("No document found for creator ID: \(creatorId)")
                     }
                 } catch {
-                    print("Error fetching creator \(creatorId): \(error)")
+                    logger.error("Error fetching creator \(creatorId): \(error)")
                 }
             }
         }
@@ -254,11 +256,11 @@ class VideoFeedViewModel: ObservableObject {
     }
     
     func updateVideoStats(video: Video) async throws {
-        print("VideoFeedViewModel: -------- Starting Stats Update --------")
-        print("VideoFeedViewModel: Updating stats for video: \(video.stableId)")
-        print("VideoFeedViewModel: Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
-        print("VideoFeedViewModel: Stats document ID: \(video.statsDocumentId)")
-        print("VideoFeedViewModel: Collection: \(video.isArchiveVideo ? "archive_video_stats" : "video_stats")")
+        logger.info("-------- Starting Stats Update --------")
+        logger.debug("Updating stats for video: \(video.stableId)")
+        logger.debug("Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
+        logger.debug("Stats document ID: \(video.statsDocumentId)")
+        logger.debug("Collection: \(video.isArchiveVideo ? "archive_video_stats" : "video_stats")")
         
         let db = Firestore.firestore()
         let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
@@ -266,39 +268,39 @@ class VideoFeedViewModel: ObservableObject {
         
         do {
             // Try to get the document first
-            print("VideoFeedViewModel: Fetching existing stats document")
+            logger.debug("Fetching existing stats document")
             let docSnapshot = try await statsRef.getDocument()
             
             if docSnapshot.exists {
-                print("VideoFeedViewModel: Existing stats found. Current data: \(String(describing: docSnapshot.data()))")
+                logger.debug("Existing stats found. Current data: \(String(describing: docSnapshot.data()))")
                 // Document exists, update it
                 try await statsRef.updateData([
                     "views": FieldValue.increment(Int64(1)),
                     "updatedAt": FieldValue.serverTimestamp()
                 ])
-                print("VideoFeedViewModel: Successfully incremented view count")
+                logger.success("Successfully incremented view count")
                 
                 // Get the updated document to sync local state
                 let updatedDoc = try await statsRef.getDocument()
                 let updatedData = updatedDoc.data() ?? [:]
-                print("VideoFeedViewModel: Updated document data: \(updatedData)")
+                logger.debug("Updated document data: \(updatedData)")
                 
                 let updatedViews = updatedData["views"] as? Int ?? 0
-                print("VideoFeedViewModel: New view count: \(updatedViews)")
+                logger.debug("New view count: \(updatedViews)")
                 
                 // Update local video objects
                 await MainActor.run {
                     if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                        print("VideoFeedViewModel: Updating main array at index \(index)")
+                        logger.debug("Updating main array at index \(index)")
                         videos[index].views = updatedViews
                     }
                     if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                        print("VideoFeedViewModel: Updating search results at index \(index)")
+                        logger.debug("Updating search results at index \(index)")
                         searchResults[index].views = updatedViews
                     }
                 }
             } else {
-                print("VideoFeedViewModel: No existing stats document found, creating new one")
+                logger.debug("No existing stats document found, creating new one")
                 // Document doesn't exist, create it with initial stats
                 let initialData: [String: Any] = [
                     "views": 1,
@@ -308,64 +310,76 @@ class VideoFeedViewModel: ObservableObject {
                     "videoId": video.statsDocumentId  // Add this to help with tracking
                 ]
                 try await statsRef.setData(initialData)
-                print("VideoFeedViewModel: Created initial stats document with data: \(initialData)")
+                logger.debug("Created initial stats document with data: \(initialData)")
                 
                 // Update local video objects with initial view count of 1
                 await MainActor.run {
                     if let index = videos.firstIndex(where: { $0.stableId == video.stableId }) {
-                        print("VideoFeedViewModel: Updating main array at index \(index)")
+                        logger.debug("Updating main array at index \(index)")
                         videos[index].views = 1
                     }
                     if let index = searchResults.firstIndex(where: { $0.stableId == video.stableId }) {
-                        print("VideoFeedViewModel: Updating search results at index \(index)")
+                        logger.debug("Updating search results at index \(index)")
                         searchResults[index].views = 1
                     }
                 }
             }
-            print("VideoFeedViewModel: -------- Stats Update Complete --------")
+            logger.success("-------- Stats Update Complete --------")
         } catch {
-            print("VideoFeedViewModel: -------- Stats Update Failed --------")
-            print("VideoFeedViewModel: Error updating video stats: \(error.localizedDescription)")
-            print("VideoFeedViewModel: Full error details: \(error)")
+            logger.error("-------- Stats Update Failed --------")
+            logger.error("Error updating video stats: \(error.localizedDescription)")
+            logger.error("Full error details: \(error)")
             throw error
         }
     }
     
     func searchVideos(hashtag: String) async {
+        logger.info("🔍 Starting hashtag search for: #\(hashtag)")
         do {
             // Search in uploaded videos
+            logger.debug("Searching uploaded videos for hashtag: #\(hashtag)")
             let uploadedSnapshot = try await db.collection("videos")
                 .whereField("hashtags", arrayContains: hashtag.lowercased())
                 .limit(to: 25)
                 .getDocuments()
             
+            logger.debug("Found \(uploadedSnapshot.documents.count) uploaded videos")
             let uploadedVideos = uploadedSnapshot.documents.compactMap { document in
                 try? document.data(as: Video.self)
             }
+            logger.debug("Successfully decoded \(uploadedVideos.count) uploaded videos")
             
             // Search in archive videos
+            logger.debug("Starting archive video search")
             let archiveResults = await searchArchiveVideos(query: hashtag)
+            logger.debug("Found \(archiveResults.count) archive videos")
             
             // Combine results
+            logger.debug("Combining search results")
             searchResults = uploadedVideos + archiveResults
+            logger.info("Total search results: \(searchResults.count)")
             
             // Fetch creators and stats in parallel
+            logger.debug("Fetching creators and stats")
             async let creatorsTask = fetchCreators(for: uploadedVideos)
             async let statsTask = fetchVideoStats(for: searchResults)
             _ = await [try await creatorsTask, try await statsTask]
+            logger.debug("Completed fetching creators and stats")
             
             // Add archive user for archive videos
             if !archiveResults.isEmpty {
+                logger.debug("Adding archive user to creators")
                 videoCreators["archive_user"] = archiveUser
             }
             
         } catch {
+            logger.error("❌ Search error: \(error.localizedDescription)")
             searchError = error
-            print("Error searching videos: \(error)")
         }
     }
     
     private func searchArchiveVideos(query: String) async -> [Video] {
+        logger.debug("Starting archive video search for query: \(query)")
         do {
             let searchURL = URL(string: "\(InternetArchiveAPI.baseURL)/advancedsearch.php")!
             var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
@@ -388,12 +402,12 @@ class VideoFeedViewModel: ObservableObject {
             ]
             
             components.queryItems = queryItems
-            print("Archive search URL: \(components.url?.absoluteString ?? "")")
+            logger.debug("Archive search URL: \(components.url?.absoluteString ?? "")")
             
             let (data, _) = try await URLSession.shared.data(from: components.url!)
             let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
             
-            print("Found \(searchResponse.response.docs.count) archive results")
+            logger.debug("Found \(searchResponse.response.docs.count) archive results")
             
             // Fetch stats for all archive videos in parallel
             async let statsSnapshots = db.collection("archive_video_stats")
@@ -564,10 +578,10 @@ class VideoFeedViewModel: ObservableObject {
     
     @MainActor
     func fetchVideoStats(for video: Video) async throws -> Int {
-        print("VideoFeedViewModel: -------- Starting Single Video Stats Fetch --------")
-        print("VideoFeedViewModel: Fetching stats for video: \(video.stableId)")
-        print("VideoFeedViewModel: Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
-        print("VideoFeedViewModel: Stats document ID: \(video.statsDocumentId)")
+        logger.info("-------- Starting Single Video Stats Fetch --------")
+        logger.debug("Fetching stats for video: \(video.stableId)")
+        logger.debug("Video type: \(video.isArchiveVideo ? "Archive" : "Regular")")
+        logger.debug("Stats document ID: \(video.statsDocumentId)")
         
         let collectionName = video.isArchiveVideo ? "archive_video_stats" : "video_stats"
         let statsRef = db.collection(collectionName).document(video.statsDocumentId)
@@ -577,15 +591,15 @@ class VideoFeedViewModel: ObservableObject {
             if docSnapshot.exists {
                 let data = docSnapshot.data() ?? [:]
                 let views = data["views"] as? Int ?? 0
-                print("VideoFeedViewModel: Found stats - views: \(views)")
+                logger.debug("Found stats - views: \(views)")
                 return views
             } else {
-                print("VideoFeedViewModel: No stats document found")
+                logger.warning("No stats document found")
                 return 0
             }
         } catch {
-            print("VideoFeedViewModel: Error fetching stats: \(error)")
-            print("VideoFeedViewModel: Full error details: \(error)")
+            logger.error("Error fetching stats: \(error)")
+            logger.error("Full error details: \(error)")
             throw error
         }
     }

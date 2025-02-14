@@ -88,38 +88,64 @@ private struct InputLineView: View {
                 .foregroundColor(.green)
                 .font(.system(.body, design: .monospaced))
             
-            TextField("", text: $userInput)
-                .textFieldStyle(.plain)
-                .foregroundColor(.green)
-                .font(.system(.body, design: .monospaced))
-                .background(Color.clear)
-                .accentColor(.green)
-                .onSubmit(processCommand)
-                .submitLabel(.return)
-                .focused($isFocused)
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        isFocused = true
+            ZStack(alignment: .leading) {
+                TextField("", text: $userInput)
+                    .textFieldStyle(.plain)
+                    .foregroundColor(.green)
+                    .font(.system(.body, design: .monospaced))
+                    .background(Color.clear)
+                    .accentColor(.clear) // Hide default cursor
+                    .onSubmit(processCommand)
+                    .submitLabel(.return)
+                    .focused($isFocused)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            isFocused = true
+                        }
                     }
+                    .onDisappear {
+                        isFocused = false
+                    }
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                
+                if showCursor && !isProcessing {
+                    // Get the text up to the cursor position
+                    let textBeforeCursor = String(userInput)
+                    
+                    // Position cursor using GeometryReader
+                    GeometryReader { geometry in
+                        Rectangle()
+                            .fill(Color.green)
+                            .frame(width: 2, height: 24) // Taller and thinner cursor
+                            .offset(x: textWidth(textBeforeCursor))
+                            .animation(.none) // Disable animation for instant positioning
+                    }
+                    .frame(height: 24) // Match the cursor height
                 }
-                .onDisappear {
-                    isFocused = false
-                }
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-            
-            if showCursor && !isProcessing {
-                Rectangle()
-                    .fill(Color.green)
-                    .frame(width: 8, height: 20)
             }
+            .frame(maxWidth: .infinity, alignment: .leading) // Ensure proper text alignment
         }
+    }
+    
+    // Helper function to calculate text width using monospaced font metrics
+    private func textWidth(_ text: String) -> CGFloat {
+        let font = UIFont.monospacedSystemFont(ofSize: UIFont.systemFontSize, weight: .regular)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        return size.width
     }
 }
 
 // MARK: - Menu Overlay View
 private struct MenuOverlayView: View {
     @Binding var showMenu: Bool
+    @Binding var selectedVideo: Video?
+    @Binding var showVideoPlayer: Bool
+    @Binding var navigationPath: NavigationPath
+    @Binding var selectedTab: Int
     
     var body: some View {
         ZStack {
@@ -130,12 +156,29 @@ private struct MenuOverlayView: View {
                 }
             
             VStack(spacing: 20) {
-                MenuButton(title: "SUBMISSIONS", icon: "house.fill", action: { showMenu = false })
-                MenuButton(title: "COLLECTIONS", icon: "tv", action: { showMenu = false })
-                MenuButton(title: "SEARCH", icon: "magnifyingglass.circle.fill", action: { showMenu = false })
-                MenuButton(title: "WALLET", icon: "dollarsign.circle.fill", action: { showMenu = false })
-                MenuButton(title: "UPLOAD", icon: "plus.square.fill", action: { showMenu = false })
-                MenuButton(title: "PROFILE", icon: "person.fill", action: { showMenu = false })
+                MenuButton(title: "SUBMISSIONS", icon: "house.fill", isSelected: selectedTab == 2) {
+                    selectedTab = 2 // Just switch to Uploads tab
+                }
+                
+                MenuButton(title: "COLLECTIONS", icon: "tv", isSelected: selectedTab == 1) {
+                    selectedTab = 1 // Just switch to Collections tab
+                }
+                
+                MenuButton(title: "SEARCH", icon: "magnifyingglass.circle.fill", isSelected: selectedTab == 4) {
+                    selectedTab = 4 // Just switch to Search tab
+                }
+                
+                MenuButton(title: "WALLET", icon: "dollarsign.circle.fill", isSelected: selectedTab == 3) {
+                    selectedTab = 3 // Just switch to Wallet tab
+                }
+                
+                MenuButton(title: "UPLOAD", icon: "plus.square.fill", isSelected: selectedTab == 6) {
+                    selectedTab = 6 // Just switch to Upload tab
+                }
+                
+                MenuButton(title: "PROFILE", icon: "person.fill", isSelected: selectedTab == 7) {
+                    selectedTab = 7 // Just switch to Profile tab
+                }
             }
             .padding()
             .background(Color.black.opacity(0.9))
@@ -147,20 +190,21 @@ private struct MenuOverlayView: View {
 private struct MenuButton: View {
     let title: String
     let icon: String
+    let isSelected: Bool
     let action: () -> Void
     
     var body: some View {
         Button(action: action) {
             HStack {
                 Image(systemName: icon)
-                    .foregroundColor(.green)
+                    .foregroundColor(isSelected ? .black : .green)
                 Text(title)
-                    .foregroundColor(.green)
+                    .foregroundColor(isSelected ? .black : .green)
                     .font(.system(.body, design: .monospaced))
             }
             .frame(maxWidth: .infinity)
             .padding()
-            .background(Color.black)
+            .background(isSelected ? Color.green : Color.black)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.green, lineWidth: 1)
@@ -178,16 +222,18 @@ struct TerminalView: View {
     @State private var showMenu = false
     @State private var showVideoPlayer = false
     @State private var selectedVideo: Video?
+    @State private var navigationPath = NavigationPath()
     @StateObject private var aiService = AISearchViewModel()
     @StateObject private var tipViewModel = TipViewModel.shared
     @StateObject private var feedViewModel = VideoFeedViewModel()
     @StateObject private var archiveViewModel = ArchiveVideoViewModel()
     @Environment(\.dismiss) private var dismiss
+    @Binding var selectedTab: Int
     
     let timer = Timer.publish(every: 0.6, on: .main, in: .common).autoconnect()
     
     var body: some View {
-        NavigationView {
+        NavigationStack(path: $navigationPath) {
             ZStack {
                 Color.black.edgesIgnoringSafeArea(.all)
                 
@@ -207,7 +253,13 @@ struct TerminalView: View {
                 .edgesIgnoringSafeArea(.top)
                 
                 if showMenu {
-                    MenuOverlayView(showMenu: $showMenu)
+                    MenuOverlayView(
+                        showMenu: $showMenu,
+                        selectedVideo: $selectedVideo,
+                        showVideoPlayer: $showVideoPlayer,
+                        navigationPath: $navigationPath,
+                        selectedTab: $selectedTab
+                    )
                 }
             }
             .onReceive(timer) { _ in
@@ -233,6 +285,31 @@ struct TerminalView: View {
                         showCreator: true
                     )
                     .environmentObject(feedViewModel)
+                }
+            }
+            .navigationDestination(for: String.self) { destination in
+                switch destination {
+                case "submissions":
+                    UnifiedVideoView(mode: .feed)
+                        .environmentObject(feedViewModel)
+                case "collections":
+                    UnifiedVideoView(mode: .archive)
+                        .environmentObject(feedViewModel)
+                case "search":
+                    AISearchView()
+                        .environmentObject(feedViewModel)
+                case "wallet":
+                    WalletView()
+                case "upload":
+                    VideoUploadView(scrollToTop: .constant(false), onDismiss: {
+                        navigationPath.removeLast()
+                    })
+                    .environmentObject(feedViewModel)
+                case "profile":
+                    ProfileView()
+                        .environmentObject(feedViewModel)
+                default:
+                    EmptyView()
                 }
             }
         }

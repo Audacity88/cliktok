@@ -1,46 +1,8 @@
 import Foundation
 import AVKit
 
-// Since ArchiveVideo is in the Models directory of the main target, we don't need to import it
-// The String+HTML extension is also in the main target's Extensions directory
-
-// Remove Models import since ArchiveVideo is in the main target
-// Remove Utilities import since Logger is in the main target
-
-// Import String extension for HTML cleaning
-// extension String {
-//     func cleaningHTMLTags() -> String {
-//         // Forward to the implementation in String+HTML.swift
-//         return self.cleaningHTMLTags()
-//     }
-// }
-
 // Import the ArchiveVideo model
-// import Models  // Remove this comment
-
-// Import ArchiveVideo model and String extension
-// struct ArchiveVideo {
-//     let id: String
-//     let identifier: String
-//     let title: String
-//     let videoURL: String
-//     let thumbnailURL: String?
-//     let description: String?
-    
-//     init(id: String = UUID().uuidString,
-//          identifier: String,
-//          title: String,
-//          videoURL: String,
-//          thumbnailURL: String? = nil,
-//          description: String? = nil) {
-//         self.id = id
-//         self.identifier = identifier
-//         self.title = title
-//         self.videoURL = videoURL
-//         self.thumbnailURL = thumbnailURL
-//         self.description = description
-//     }
-// }
+// import Models
 
 struct InternetArchiveMetadata: Codable {
     let metadata: ArchiveMetadata
@@ -304,6 +266,7 @@ extension InternetArchiveAPI {
 
 actor InternetArchiveAPI {
     static let shared = InternetArchiveAPI()
+    private let logger = Logger(component: "InternetArchiveAPI")
     
     // Cache for metadata to prevent repeated fetches
     private var metadataCache: [String: InternetArchiveMetadata] = [:]
@@ -317,9 +280,12 @@ actor InternetArchiveAPI {
         videoCache.removeAll()
         metadataFetchTasks.values.forEach { $0.cancel() }
         metadataFetchTasks.removeAll()
+        logger.info("Caches cleared")
     }
     
     func fetchCollectionItems(identifier: String? = nil, query: String? = nil, offset: Int = 0, limit: Int = 5) async throws -> [ArchiveVideo] {
+        logger.debug("Fetching items - Query: \(query ?? "nil"), Collection: \(identifier ?? "nil")")
+        
         let searchURL = URL(string: "\(Self.baseURL)/advancedsearch.php")!
         var components = URLComponents(url: searchURL, resolvingAgainstBaseURL: true)!
         
@@ -386,21 +352,22 @@ actor InternetArchiveAPI {
         components.queryItems = queryItems
         
         guard let url = components.url else {
+            logger.error("Failed to construct URL from components")
             throw NSError(domain: "InternetArchive", code: 400, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to construct valid URL"
             ])
         }
         
+        logger.debug("Fetching from URL: \(url.absoluteString)")
         let (data, response) = try await URLSession.shared.data(from: url)
         
-        // Debug: Print raw response
-        if let jsonString = String(data: data, encoding: .utf8) {
-            print("Raw JSON response: \(jsonString)")
-        }
-        
         if let httpResponse = response as? HTTPURLResponse {
+            logger.debug("Search response status: \(httpResponse.statusCode)")
+            
+            // Check for error response first
             if httpResponse.statusCode >= 400 {
                 if let errorResponse = try? JSONDecoder().decode(ArchiveAPIError.self, from: data) {
+                    logger.error("API Error: \(errorResponse.error)")
                     throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
                         NSLocalizedDescriptionKey: errorResponse.error
                     ])
@@ -413,6 +380,8 @@ actor InternetArchiveAPI {
             // Try to decode the successful response
             do {
                 let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
+                logger.info("Found \(searchResponse.response.docs.count) items")
+                
                 var videos: [ArchiveVideo] = []
                 
                 for doc in searchResponse.response.docs {
@@ -425,6 +394,7 @@ actor InternetArchiveAPI {
                 return videos
                 
             } catch {
+                logger.error("Error decoding response: \(error)")
                 throw error
             }
         }
@@ -437,26 +407,29 @@ actor InternetArchiveAPI {
     private func fetchMetadata(identifier: String) async throws -> InternetArchiveMetadata {
         // Check cache first
         if let cached = metadataCache[identifier] {
+            logger.debug("Using cached metadata for \(identifier)")
             return cached
         }
         
         // Check if there's already a fetch in progress
         if let existingTask = metadataFetchTasks[identifier] {
+            logger.debug("Using existing fetch task for \(identifier)")
             return try await existingTask.value
         }
         
         // Create new fetch task
         let task = Task<InternetArchiveMetadata, Error> {
+            logger.debug("Fetching metadata for \(identifier)")
             let url = URL(string: "\(Self.baseURL)/metadata/\(identifier)")!
             
             let (data, response) = try await URLSession.shared.data(from: url)
             
             if let httpResponse = response as? HTTPURLResponse {
-                print("Metadata response status: \(httpResponse.statusCode)")
+                logger.debug("Metadata response status: \(httpResponse.statusCode)")
             }
             
             let metadata = try JSONDecoder().decode(InternetArchiveMetadata.self, from: data)
-            print("Decoded metadata with \(metadata.files.count) files")
+            logger.debug("Decoded metadata with \(metadata.files.count) files")
             
             // Cache the result
             metadataCache[identifier] = metadata
@@ -479,6 +452,7 @@ actor InternetArchiveAPI {
     private func getVideoFiles(from metadata: InternetArchiveMetadata) -> [ArchiveVideo] {
         // Check video cache first
         if let cached = videoCache[metadata.metadata.identifier] {
+            logger.debug("Using cached videos for \(metadata.metadata.identifier)")
             return cached
         }
         
@@ -501,97 +475,94 @@ actor InternetArchiveAPI {
             ".zip", ".rar", ".7z"                    // Archives
         ]
         
-        // Filter and process video files
-        let videoFiles = metadata.files.filter { file in
+        for file in metadata.files {
             let name = file.name.lowercased()
             let format = file.format?.lowercased() ?? ""
             
-            // Skip non-video files early
+            // Skip files with known non-video extensions
             if nonVideoExtensions.contains(where: { name.hasSuffix($0) }) {
-                return false
+                continue
             }
             
-            return isVideoFile(name: name, format: format)
-        }
-        
-        print("Found \(videoFiles.count) potential video files in \(metadata.metadata.identifier)")
-        
-        // Group video files by title
-        for file in videoFiles {
-            if let format = file.videoFormat {
+            // Check if this is a video file using multiple criteria
+            let isVideoByExtension = validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isVideoByFormat = validVideoFormats.contains(where: { format.contains($0) })
+            let isVideoByFormatField = format.contains("video")
+            let is512kbVideo = name.contains("512kb") && validVideoExtensions.contains(where: { name.hasSuffix($0) })
+            let isComputerChronicles = name.contains(".cct.") || name.contains("_512kb") || name.contains("_256kb")
+            
+            let isVideoFile = isVideoByExtension || isVideoByFormat || isVideoByFormatField || is512kbVideo || isComputerChronicles
+            
+            if isVideoFile {
+                let format = file.videoFormat ?? .mp4
                 let baseTitle = file.title ?? metadata.metadata.title ?? file.name
                 let key = baseTitle.lowercased()
-                videoMap[key, default: []].append((file, format))
+                
+                if videoMap[key] == nil {
+                    videoMap[key] = []
+                }
+                
+                videoMap[key]?.append((file, format))
             }
         }
         
-        // Convert to ArchiveVideo objects
+        // If no video files found, return empty array
+        if videoMap.isEmpty {
+            return []
+        }
+        
         var bestFormatVideos: [ArchiveVideo] = []
         
         for (_, variants) in videoMap {
-            if let bestVariant = selectBestVideoVariant(from: variants) {
-                if let video = createArchiveVideo(from: bestVariant.0, metadata: metadata) {
-                    bestFormatVideos.append(video)
+            let sortedVariants = variants.sorted { (a, b) -> Bool in
+                let name1 = a.0.name.lowercased()
+                let name2 = b.0.name.lowercased()
+                
+                // Prefer 512kb versions
+                if name1.contains("512kb") && !name2.contains("512kb") {
+                    return true
                 }
+                if !name1.contains("512kb") && name2.contains("512kb") {
+                    return false
+                }
+                
+                // Then prefer mp4
+                if name1.hasSuffix(".mp4") && !name2.hasSuffix(".mp4") {
+                    return true
+                }
+                if !name1.hasSuffix(".mp4") && name2.hasSuffix(".mp4") {
+                    return false
+                }
+                
+                // Finally sort by size if available
+                if let size1 = Int(a.0.size ?? "0"),
+                   let size2 = Int(b.0.size ?? "0") {
+                    return size1 > size2 // Prefer larger files
+                }
+                
+                return a.1.rawValue < b.1.rawValue
+            }
+            
+            if let bestVariant = sortedVariants.first {
+                let file = bestVariant.0
+                let videoURL = "\(Self.baseURL)/download/\(metadata.metadata.identifier)/\(file.name)"
+                
+                let video = ArchiveVideo(
+                    identifier: metadata.metadata.identifier,
+                    title: file.title ?? metadata.metadata.title ?? file.name,
+                    videoURL: videoURL,
+                    thumbnailURL: Self.getThumbnailURL(identifier: metadata.metadata.identifier).absoluteString,
+                    description: file.description ?? metadata.metadata.description ?? ""
+                )
+                
+                bestFormatVideos.append(video)
             }
         }
         
-        print("Selected \(bestFormatVideos.count) best format videos from \(metadata.metadata.identifier)")
-        
-        // Cache the results
-        videoCache[metadata.metadata.identifier] = bestFormatVideos
-        return bestFormatVideos
-    }
-    
-    // Helper function to check if a file is a video
-    private func isVideoFile(name: String, format: String) -> Bool {
-        let validVideoExtensions = [".mp4", ".m4v", ".mov", ".avi", ".mkv"]
-        let validVideoFormats = ["h.264", "mpeg4", "quicktime", "matroska"]
-        
-        let isVideoByExtension = validVideoExtensions.contains(where: { name.hasSuffix($0) })
-        let isVideoByFormat = validVideoFormats.contains(where: { format.contains($0) })
-        let isVideoByFormatField = format.contains("video")
-        let is512kbVideo = name.contains("512kb") && validVideoExtensions.contains(where: { name.hasSuffix($0) })
-        let isComputerChronicles = name.contains(".cct.") || name.contains("_512kb") || name.contains("_256kb")
-        
-        return isVideoByExtension || isVideoByFormat || isVideoByFormatField || is512kbVideo || isComputerChronicles
-    }
-    
-    // Helper function to select the best video variant
-    private func selectBestVideoVariant(from variants: [(InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)]) -> (InternetArchiveMetadata.ArchiveFile, InternetArchiveMetadata.VideoFormat)? {
-        return variants.sorted { (a, b) -> Bool in
-            let name1 = a.0.name.lowercased()
-            let name2 = b.0.name.lowercased()
-            
-            // Prefer 512kb versions
-            if name1.contains("512kb") && !name2.contains("512kb") { return true }
-            if !name1.contains("512kb") && name2.contains("512kb") { return false }
-            
-            // Then prefer mp4
-            if name1.hasSuffix(".mp4") && !name2.hasSuffix(".mp4") { return true }
-            if !name1.hasSuffix(".mp4") && name2.hasSuffix(".mp4") { return false }
-            
-            // Finally sort by size if available
-            if let size1 = Int(a.0.size ?? "0"),
-               let size2 = Int(b.0.size ?? "0") {
-                return size1 > size2 // Prefer larger files
-            }
-            
-            return a.1.rawValue < b.1.rawValue
-        }.first
-    }
-    
-    // Helper function to create ArchiveVideo object
-    private func createArchiveVideo(from file: InternetArchiveMetadata.ArchiveFile, metadata: InternetArchiveMetadata) -> ArchiveVideo? {
-        let videoURL = "\(Self.baseURL)/download/\(metadata.metadata.identifier)/\(file.name)"
-        
-        return ArchiveVideo(
-            identifier: metadata.metadata.identifier,
-            title: (file.title ?? metadata.metadata.title ?? file.name).cleaningHTMLTags(),
-            videoURL: videoURL,
-            thumbnailURL: Self.getThumbnailURL(identifier: metadata.metadata.identifier).absoluteString,
-            description: (file.description ?? metadata.metadata.description ?? "").cleaningHTMLTags()
-        )
+        // Cache the results before returning
+        let videos = bestFormatVideos
+        videoCache[metadata.metadata.identifier] = videos
+        return videos
     }
 }
 

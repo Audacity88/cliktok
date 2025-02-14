@@ -48,16 +48,7 @@ actor AISearchService {
             apiKey = try Configuration.openAIApiKey
         } catch {
             #if DEBUG
-            print("""
-            ⚠️ OpenAI API key not found!
-            
-            Please set up the OPENAI_API_KEY environment variable:
-            1. Open Xcode
-            2. Select cliktok scheme
-            3. Edit Scheme...
-            4. Run > Arguments > Environment Variables
-            5. Add OPENAI_API_KEY with your API key
-            """)
+            logger.error("OpenAI API key not found. Please set up OPENAI_API_KEY environment variable")
             #endif
             throw AISearchError.invalidAPIKey
         }
@@ -99,7 +90,7 @@ actor AISearchService {
             let batchEnd = min(batchStart + BATCH_SIZE, videosToRank.count)
             let batch = Array(videosToRank[batchStart..<batchEnd])
             
-            logger.info("Processing batch \(batchStart/BATCH_SIZE + 1) with \(batch.count) videos")
+            logger.debug("Processing batch \(batchStart/BATCH_SIZE + 1) with \(batch.count) videos")
             
             let batchInfo = batch.enumerated().map { index, video in
                 """
@@ -131,7 +122,6 @@ actor AISearchService {
                     model: .gpt4_turbo_preview
                 )
                 
-                logger.debug("Sending ranking request to GPT for batch \(batchStart/BATCH_SIZE + 1)")
                 let result = try await client.chats(query: chatQuery)
                 
                 guard case let .string(content) = result.choices.first?.message.content else {
@@ -139,13 +129,9 @@ actor AISearchService {
                     throw AISearchError.rankingFailed
                 }
                 
-                logger.debug("Received GPT response: \(content)")
-                
                 // Clean and parse the response
                 let cleanContent = content.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
                 let scoreStrings = cleanContent.split(separator: ",")
-                
-                logger.debug("Split response into \(scoreStrings.count) parts")
                 
                 let scores = scoreStrings.compactMap { substring -> Double? in
                     let trimmed = substring.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
@@ -160,11 +146,9 @@ actor AISearchService {
                     return score
                 }
                 
-                logger.debug("Successfully parsed \(scores.count) scores")
-                
                 // Verify we have the correct number of scores for this batch
                 guard scores.count == batch.count else {
-                    logger.error("Error: Score count (\(scores.count)) doesn't match batch size (\(batch.count))")
+                    logger.error("Score count (\(scores.count)) doesn't match batch size (\(batch.count))")
                     throw AISearchError.rankingFailed
                 }
                 
@@ -172,7 +156,7 @@ actor AISearchService {
                 let batchResults = Array(zip(batch, scores))
                 allRankedVideos.append(contentsOf: batchResults)
                 
-                logger.debug("Added batch \(batchStart/BATCH_SIZE + 1) results")
+                logger.debug("Completed batch \(batchStart/BATCH_SIZE + 1)")
                 
             } catch {
                 logger.error("Error processing batch \(batchStart/BATCH_SIZE + 1): \(error)")
@@ -185,14 +169,13 @@ actor AISearchService {
             .sorted { $0.score > $1.score }
             .map { $0.video }
         
-        logger.info("Successfully ranked all \(rankedVideos.count) videos")
+        logger.success("Successfully ranked \(rankedVideos.count) videos")
         
-        // Print final rankings for debugging
-        logger.debug("=== FINAL RANKED RESULTS ===")
-        for (index, result) in allRankedVideos.sorted(by: { $0.score > $1.score }).enumerated() {
-            logger.debug("Rank \(index + 1): \(result.video.title) (Score: \(result.score))")
+        // Log top 3 results for debugging
+        logger.debug("Top 3 ranked results:")
+        for (index, result) in allRankedVideos.sorted(by: { $0.score > $1.score }).prefix(3).enumerated() {
+            logger.debug("  \(index + 1). \(result.video.title) (Score: \(Int(result.score)))")
         }
-        logger.debug("=========================")
         
         return rankedVideos
     }
@@ -240,34 +223,6 @@ actor AISearchService {
           "type": "content type or null",
           "subject": "subject matter or null"
         }
-
-        Examples:
-        Input: "funny cat videos from the 90s"
-        {
-          "query": "cats funny",
-          "year": "1990s",
-          "genre": "funny",
-          "type": "videos",
-          "subject": "cats"
-        }
-
-        Input: "educational documentaries about space"
-        {
-          "query": "space education",
-          "year": null,
-          "genre": "educational",
-          "type": "documentaries",
-          "subject": "space"
-        }
-
-        Input: "funny"
-        {
-          "query": "funny",
-          "year": null,
-          "genre": "funny",
-          "type": "videos",
-          "subject": "comedy"
-        }
         """
         
         let userContent = "Process this query: \(query.cleaningHTMLTags())"
@@ -291,8 +246,6 @@ actor AISearchService {
                 throw AISearchError.processingFailed
             }
             
-            logger.debug("GPT Response: \(content)")
-            
             // Try to extract JSON from the response (in case there's any extra text)
             guard let jsonStart = content.firstIndex(of: "{"),
                   let jsonEnd = content.lastIndex(of: "}") else {
@@ -301,7 +254,6 @@ actor AISearchService {
             }
             
             let jsonString = String(content[jsonStart...jsonEnd])
-            logger.debug("Extracted JSON: \(jsonString)")
             
             // First parse as Any to handle null values
             guard let data = jsonString.data(using: .utf8),
@@ -322,7 +274,7 @@ actor AISearchService {
                 }
             }
             
-            logger.debug("Parsed parameters: \(params)")
+            logger.debug("Parsed query parameters: \(params)")
             
             // Build the Internet Archive query string
             var queryParts: [String] = []
@@ -353,7 +305,7 @@ actor AISearchService {
             }
             
             let finalQuery = queryParts.isEmpty ? query : queryParts.joined(separator: " AND ")
-            logger.debug("Final query: \(finalQuery)")
+            logger.info("Final query: \(finalQuery)")
             
             return (query: finalQuery, filters: params)
         } catch {

@@ -2,6 +2,9 @@ import SwiftUI
 import AVKit
 import Foundation
 import FirebaseAuth
+import os
+
+private let logger = Logger(component: "UnifiedVideoView")
 
 private extension String {
     func optimizedVideoURL() -> String {
@@ -168,7 +171,6 @@ struct VideoList: View {
 }
 
 struct UnifiedVideoView: View {
-    @StateObject private var feedViewModel = VideoFeedViewModel()
     @StateObject private var archiveViewModel = ArchiveVideoViewModel()
     @State private var currentIndex = 0
     @State private var isPrefetching = false
@@ -180,6 +182,9 @@ struct UnifiedVideoView: View {
     @State private var dragOffset = CGSize.zero
     @State private var opacity: Double = 1.0
     @Environment(\.dismiss) private var dismiss
+    
+    // Use ObservedObject for externally provided view model
+    @ObservedObject var feedViewModel: VideoFeedViewModel
     
     enum ViewMode {
         case feed
@@ -200,17 +205,20 @@ struct UnifiedVideoView: View {
         self.fixedVideos = nil
         self.showBackButton = false
         self._clearSearchOnDismiss = .constant(false)
+        self.feedViewModel = VideoFeedViewModel()
     }
     
-    init(videos: [Video], startingVideo: Video, showBackButton: Bool, clearSearchOnDismiss: Binding<Bool>) {
-        self._mode = State(initialValue: .grid)
+    init(mode: ViewMode = .grid, videos: [Video]? = nil, startingVideo: Video? = nil, showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false), feedViewModel: VideoFeedViewModel) {
+        self._mode = State(initialValue: mode)
         self._searchQuery = State(initialValue: "")
         self.startingVideo = startingVideo
         self.fixedVideos = videos
         self.showBackButton = showBackButton
         self._clearSearchOnDismiss = clearSearchOnDismiss
+        self.feedViewModel = feedViewModel
         
-        if let index = videos.firstIndex(where: { $0.stableId == startingVideo.stableId }) {
+        if let videos = videos, let startingVideo = startingVideo,
+           let index = videos.firstIndex(where: { $0.stableId == startingVideo.stableId }) {
             self._currentIndex = State(initialValue: index)
         } else {
             self._currentIndex = State(initialValue: 0)
@@ -229,6 +237,7 @@ struct UnifiedVideoView: View {
                     archiveIdentifier: archiveVideo.identifier,
                     userID: "archive_user",
                     videoURL: archiveVideo.videoURL.optimizedVideoURL(),
+                    thumbnailURL: InternetArchiveAPI.getThumbnailURL(identifier: archiveVideo.identifier).absoluteString,
                     caption: archiveVideo.title,
                     description: archiveVideo.description,
                     hashtags: ["archive"],
@@ -287,28 +296,37 @@ struct UnifiedVideoView: View {
                 }
                 .onChange(of: searchQuery) { _, newQuery in
                     guard mode == .search else { return }
+                    logger.debug("Search query changed to: \(newQuery)")
                     Task {
+                        logger.debug("Starting search for: \(newQuery)")
                         isSearching = true
                         if newQuery.hasPrefix("#") {
+                            logger.debug("Performing hashtag search")
                             await feedViewModel.searchVideos(hashtag: String(newQuery.dropFirst()))
                         } else {
+                            logger.debug("Performing text search")
                             await feedViewModel.searchByText(newQuery)
                         }
+                        logger.debug("Search completed with \(feedViewModel.searchResults.count) results")
                         isSearching = false
                     }
                 }
                 .task {
+                    logger.debug("UnifiedVideoView task started")
                     await handleInitialLoad()
                 }
                 .onAppear {
-                    // Preload collections when archive tab is opened
-                    if mode == .archive {
+                    logger.debug("UnifiedVideoView appeared with mode: \(mode)")
+                    // Only show collections if explicitly in archive mode
+                    if mode == .archive && showCollections {
+                        logger.debug("Preloading archive collections")
                         archiveViewModel.preloadCollections()
                     }
                 }
                 .onDisappear {
-                    // Cancel preloading when view disappears
+                    logger.debug("UnifiedVideoView disappeared")
                     if mode == .archive {
+                        logger.debug("Canceling archive preloading")
                         archiveViewModel.cancelPreloading()
                     }
                 }
@@ -518,6 +536,18 @@ struct UnifiedVideoView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func handleModeChange(_ newMode: ViewMode) {
+        logger.debug("Mode changing from \(mode) to \(newMode)")
+        mode = newMode
+        
+        // Reset search state when switching modes
+        if mode != .search {
+            logger.debug("Clearing search state due to mode change")
+            searchQuery = ""
+            feedViewModel.clearSearch()
         }
     }
 }

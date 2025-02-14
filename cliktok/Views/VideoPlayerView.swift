@@ -147,41 +147,45 @@ actor VideoAssetLoader {
         let videoId = getVideoIdentifier(from: (asset as? AVURLAsset)?.url ?? URL(fileURLWithPath: "unknown"))
         self.logger.debug("📊 [\(videoId)] Starting metadata load")
         
-        // Load only essential properties first
-        let essentialLoadingKeys: [String] = [
-            "tracks",
-            "duration",
-            "playable"
-        ]
+        // Stage 1: Load minimal properties needed for playback initialization
+        let minimalLoadingKeys = ["playable"]
+        try await asset.loadValues(forKeys: minimalLoadingKeys)
+        logger.performance("⚡️ [\(videoId)] Minimal properties loaded in \(Date().timeIntervalSince(startTime))s")
         
-        // Load essential properties in parallel
-        try await asset.loadValues(forKeys: essentialLoadingKeys)
-        
-        // Load tracks in parallel with optimized loading
+        // Stage 2: Load tracks in parallel
+        let tracksStartTime = Date()
         async let videoTrackTask = try await asset.loadTracks(withMediaType: .video)
         async let audioTrackTask = try await asset.loadTracks(withMediaType: .audio)
-        
         let (videoTracks, audioTracks) = try await (videoTrackTask, audioTrackTask)
+        logger.performance("⚡️ [\(videoId)] Tracks loaded in \(Date().timeIntervalSince(tracksStartTime))s")
         
         guard let videoTrack = videoTracks.first else {
             logger.error("❌ [\(videoId)] No video track found in asset")
             throw AssetError.noVideoTrack
         }
         
-        // Load essential video properties in parallel
-        logger.debug("🎥 [\(videoId)] Loading video track properties")
+        // Stage 3: Load critical video properties
         let videoPropertiesStartTime = Date()
+        let criticalProperties = ["naturalSize", "preferredTransform"]
+        try await videoTrack.loadValues(forKeys: criticalProperties)
+        logger.performance("⚡️ [\(videoId)] Critical video properties loaded in \(Date().timeIntervalSince(videoPropertiesStartTime))s")
         
-        let propertiesToLoad: [String] = ["formatDescriptions", "naturalSize", "preferredTransform"]
-        try await videoTrack.loadValues(forKeys: propertiesToLoad)
-        
-        logger.performance("⚡️ [\(videoId)] Video properties loaded in \(Date().timeIntervalSince(videoPropertiesStartTime))s")
-        
-        // Load audio track properties in background with lower priority
-        if let audioTrack = audioTracks.first {
-            Task.detached(priority: .background) {
-                self.logger.debug("🔊 [\(videoId)] Loading audio track properties in background")
-                try? await audioTrack.loadValues(forKeys: ["formatDescriptions"])
+        // Stage 4: Load duration and remaining properties in background
+        Task.detached(priority: .background) {
+            do {
+                let durationStartTime = Date()
+                try await asset.loadValues(forKeys: ["duration"])
+                self.logger.performance("⚡️ [\(videoId)] Duration loaded in \(Date().timeIntervalSince(durationStartTime))s")
+                
+                // Load remaining properties in background
+                let remainingStartTime = Date()
+                try await videoTrack.loadValues(forKeys: ["formatDescriptions"])
+                if let audioTrack = audioTracks.first {
+                    try await audioTrack.loadValues(forKeys: ["formatDescriptions"])
+                }
+                self.logger.performance("⚡️ [\(videoId)] Remaining properties loaded in \(Date().timeIntervalSince(remainingStartTime))s")
+            } catch {
+                self.logger.error("❌ [\(videoId)] Error loading additional properties: \(error.localizedDescription)")
             }
         }
         

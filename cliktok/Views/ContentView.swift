@@ -113,7 +113,7 @@ struct ContentView: View {
                     TabView(selection: $selectedTab) {
                         // Terminal Tab (Main)
                         NavigationStack {
-                            TerminalView()
+                            TerminalView(selectedTab: $selectedTab)
                                 .environmentObject(feedViewModel)
                         }
                         .tabItem {
@@ -165,6 +165,17 @@ struct ContentView: View {
                         }
                         .tag(4)
                         
+                        // Recommendations Tab
+                        NavigationStack {
+                            RecommendationsView()
+                                .environmentObject(feedViewModel)
+                        }
+                        .tabItem {
+                            Image(systemName: "sparkles.tv")
+                            Text("For You")
+                        }
+                        .tag(5)
+                        
                         // Upload tab
                         NavigationStack {
                             VideoUploadView(scrollToTop: $scrollToTop, onDismiss: {
@@ -177,7 +188,7 @@ struct ContentView: View {
                             Image(systemName: "plus.square.fill")
                             Text("Upload")
                         }
-                        .tag(5)
+                        .tag(6)
                         
                         // Profile tab
                         NavigationStack {
@@ -188,7 +199,7 @@ struct ContentView: View {
                             Image(systemName: "person.fill")
                             Text("Profile")
                         }
-                        .tag(6)
+                        .tag(7)
                     }
                     .accentColor(.green)
                 }

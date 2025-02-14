@@ -10,12 +10,14 @@ struct VideoGridView: View {
     @State private var showEditSheet = false
     @State private var videoToEdit: Video?
     @EnvironmentObject private var feedViewModel: VideoFeedViewModel
+    @State private var showVideoPlayer = false
+    @State private var isNavigating = false
     
     private let spacing: CGFloat = 1
     private let columns = [
-        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
-        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1),
-        GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 1)
+        GridItem(.flexible(), spacing: 1),
+        GridItem(.flexible(), spacing: 1),
+        GridItem(.flexible(), spacing: 1)
     ]
     
     init(videos: [Video], showBackButton: Bool = false, clearSearchOnDismiss: Binding<Bool> = .constant(false)) {
@@ -27,7 +29,7 @@ struct VideoGridView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: spacing) {
-                ForEach(videos) { video in
+                ForEach(videos, id: \.stableId) { video in
                     GeometryReader { geometry in
                         let width = geometry.size.width
                         let height = width * (4/3)
@@ -38,7 +40,11 @@ struct VideoGridView: View {
                             .clipped()
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                selectedVideo = video
+                                if !isNavigating {
+                                    isNavigating = true
+                                    selectedVideo = video
+                                    showVideoPlayer = true
+                                }
                             }
                             .contextMenu {
                                 if video.userID == Auth.auth().currentUser?.uid {
@@ -77,17 +83,23 @@ struct VideoGridView: View {
                 }
             }
         }
-        .fullScreenCover(item: $selectedVideo) { video in
-            UnifiedVideoView(
-                videos: videos,
-                startingVideo: video,
-                showBackButton: true,
-                clearSearchOnDismiss: $clearSearchOnDismiss
-            )
-            .background(TransparentBackground())
-            .environmentObject(feedViewModel)
-            .edgesIgnoringSafeArea(.all)
-            .interactiveDismissDisabled()
+        .fullScreenCover(isPresented: $showVideoPlayer) {
+            isNavigating = false
+            selectedVideo = nil
+        } content: {
+            if let video = selectedVideo {
+                UnifiedVideoView(
+                    mode: .grid,
+                    videos: videos,
+                    startingVideo: video,
+                    showBackButton: true,
+                    clearSearchOnDismiss: $clearSearchOnDismiss,
+                    feedViewModel: feedViewModel
+                )
+                .background(TransparentBackground())
+                .edgesIgnoringSafeArea(.all)
+                .interactiveDismissDisabled()
+            }
         }
         .sheet(isPresented: $showEditSheet) {
             if let video = videoToEdit {

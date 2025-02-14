@@ -88,11 +88,17 @@ class VideoUploadViewModel: ObservableObject {
             
             // Create video document in Firestore
             let video = Video(
+                id: nil,
+                archiveIdentifier: nil,
                 userID: userID,
                 videoURL: uploadedVideoURL.absoluteString,
                 thumbnailURL: uploadedThumbnailURL.absoluteString,
                 caption: caption,
+                description: nil,
                 hashtags: hashtags,
+                createdAt: Date(),
+                likes: 0,
+                views: 0,
                 isAdvertisement: isUserMarketer && isAdvertisement ? true : nil
             )
             
