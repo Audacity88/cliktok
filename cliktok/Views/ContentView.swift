@@ -122,14 +122,13 @@ struct ContentView: View {
                         }
                         .tag(0)
                         
-                        // Archive Tab
+                        // Curated, license-validated Internet Archive discovery slice.
                         NavigationStack {
-                            UnifiedVideoView(mode: .archive)
-                                .environmentObject(feedViewModel)
+                            ArchiveDiscoveryView()
                         }
                         .tabItem {
                             Image(systemName: "tv")
-                            Text("Collections")
+                            Text("Archive")
                         }
                         .tag(1)
                         
