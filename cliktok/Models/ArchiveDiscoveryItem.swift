@@ -17,14 +17,18 @@ struct ArchiveDiscoveryItem: Identifiable, Hashable {
 enum ArchiveLicensePolicy {
     static func isEligible(_ value: String?) -> Bool {
         guard let value else { return false }
-        let normalized = value.lowercased()
-        let markers = [
-            "public domain", "creativecommons.org/publicdomain/zero", "cc0",
-            "creativecommons.org/licenses/by/", "creativecommons.org/licenses/by-sa/",
-            "creativecommons.org/licenses/by-nc/", "creativecommons.org/licenses/by-nc-sa/"
-        ]
-        return markers.contains { normalized.contains($0) }
-            && !normalized.contains("no known copyright")
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["public domain", "cc0"].contains(normalized) { return true }
+        guard let url = URLComponents(string: normalized),
+              ["https", "http"].contains(url.scheme ?? ""),
+              url.host == "creativecommons.org", url.user == nil, url.password == nil,
+              url.port == nil, url.query == nil, url.fragment == nil else { return false }
+        let path = url.path.hasSuffix("/") ? String(url.path.dropLast()) : url.path
+        if path == "/publicdomain/zero/1.0" { return true }
+        let parts = path.split(separator: "/")
+        return parts.count == 3 && parts[0] == "licenses"
+            && ["by", "by-sa", "by-nc", "by-nc-sa"].contains(String(parts[1]))
+            && ["1.0", "2.0", "2.5", "3.0", "4.0"].contains(String(parts[2]))
     }
 }
 
@@ -98,8 +102,8 @@ enum ArchiveMediaSelector {
             .filter { file in
                 let name = file.name.lowercased()
                 let format = file.format?.lowercased() ?? ""
-                return name.hasSuffix(".mp4") &&
-                    (format.contains("h.264") || format.contains("mpeg4") || format.contains("mp4") || format.isEmpty)
+                return name.hasSuffix(".mp4") && file.source?.lowercased() == "derivative" &&
+                    ["h.264", "512kb mpeg4", "mpeg4"].contains(format)
             }
             .sorted { lhs, rhs in score(lhs) > score(rhs) }
             .first

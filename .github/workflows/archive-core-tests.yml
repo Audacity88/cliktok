@@ -1,0 +1,15 @@
+name: Archive core tests
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  archive-core:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh scripts/run-archive-core-tests.sh
+      - name: Typecheck discovery view model
+        run: swiftc -typecheck cliktok/Models/ArchiveDiscoveryItem.swift cliktok/Services/ArchiveDiscoveryService.swift cliktok/ViewModels/ArchiveDiscoveryViewModel.swift

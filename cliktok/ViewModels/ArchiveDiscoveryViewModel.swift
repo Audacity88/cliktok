@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class ArchiveDiscoveryViewModel: ObservableObject {
@@ -14,6 +15,8 @@ final class ArchiveDiscoveryViewModel: ObservableObject {
             do {
                 let items = try await service.fetchCatalog()
                 state = items.isEmpty ? .empty : .loaded(items)
+            } catch ArchiveDiscoveryError.noEligibleItems {
+                state = .empty
             } catch {
                 state = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }

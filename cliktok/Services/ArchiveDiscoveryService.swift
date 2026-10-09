@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 enum ArchiveDiscoveryError: LocalizedError {
     case rateLimited
@@ -32,6 +35,7 @@ actor ArchiveDiscoveryService {
         if let cache { return cache }
 
         var items: [ArchiveDiscoveryItem] = []
+        var failure: Error?
         for identifier in curatedIdentifiers {
             do {
                 if let item = try await fetchItem(identifier: identifier) { items.append(item) }
@@ -39,10 +43,14 @@ actor ArchiveDiscoveryService {
                 throw ArchiveDiscoveryError.rateLimited
             } catch {
                 // One malformed or unavailable curated item must not hide valid items.
-                continue
+                try Task.checkCancellation()
+                if failure == nil { failure = error }
             }
         }
-        guard !items.isEmpty else { throw ArchiveDiscoveryError.noEligibleItems }
+        guard !items.isEmpty else {
+            if let failure { throw failure }
+            throw ArchiveDiscoveryError.noEligibleItems
+        }
         cache = items
         return items
     }

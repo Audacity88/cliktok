@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
-tmp_binary="${TMPDIR:-/tmp}/cliktok-archive-core-tests"
-swiftc cliktok/Models/ArchiveDiscoveryItem.swift tests/ArchiveDiscoveryCoreTests.swift -o "$tmp_binary"
+cd "$(dirname "$0")/.."
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+tmp_binary="$tmp_dir/cliktok-archive-core-tests"
+swiftc cliktok/Models/ArchiveDiscoveryItem.swift cliktok/Services/ArchiveDiscoveryService.swift tests/ArchiveDiscoveryCoreTests.swift -o "$tmp_binary"
 "$tmp_binary"
