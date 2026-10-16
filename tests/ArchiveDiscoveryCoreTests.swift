@@ -51,6 +51,17 @@ enum ArchiveDiscoveryCoreTests {
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
 
+        for filename in ["../other.mp4", "nested/../../other.mp4", "./other.mp4", "nested/./other.mp4"] {
+            StubProtocol.handler = { _ in (200, Data(json.replacingOccurrences(of: "sample_512kb.mp4", with: filename).utf8)) }
+            do {
+                _ = try await ArchiveDiscoveryService(session: session).fetchCatalog()
+                preconditionFailure("traversal filename accepted: \(filename)")
+            } catch ArchiveDiscoveryError.unavailable { }
+        }
+        StubProtocol.handler = { _ in (200, Data(json.replacingOccurrences(of: "sample_512kb.mp4", with: "nested/video clip.mp4").utf8)) }
+        let nested = try await ArchiveDiscoveryService(session: session).fetchCatalog()
+        precondition(nested.first?.mediaURL.absoluteString == "https://archive.org/download/BigBuckBunny_328/nested/video%20clip.mp4", "valid nested filename must retain its path and escaping")
+
         StubProtocol.handler = { _ in throw URLError(.notConnectedToInternet) }
         do {
             _ = try await ArchiveDiscoveryService(session: session).fetchCatalog()

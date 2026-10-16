@@ -76,6 +76,8 @@ actor ArchiveDiscoveryService {
         let license = document.metadata.licenseURL ?? document.metadata.rights
         guard ArchiveLicensePolicy.isEligible(license), let license else { return nil }
         guard let file = ArchiveMediaSelector.compatibleFile(in: document.files),
+              file.name.split(separator: "/", omittingEmptySubsequences: false)
+                .allSatisfy({ $0 != "." && $0 != ".." }),
               let escapedName = file.name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let mediaURL = URL(string: "https://archive.org/download/\(encoded)/\(escapedName)"),
               let thumbnailURL = URL(string: "https://archive.org/services/img/\(encoded)"),
