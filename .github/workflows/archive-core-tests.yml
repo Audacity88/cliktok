@@ -1,0 +1,22 @@
+name: Archive core tests
+on:
+  pull_request:
+  push:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  ios-build:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build iOS app for simulator
+        run: xcodebuild -project cliktok.xcodeproj -scheme cliktok -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+  archive-core:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh scripts/run-archive-core-tests.sh
+      - name: Typecheck discovery view model
+        run: swiftc -typecheck cliktok/Models/ArchiveDiscoveryItem.swift cliktok/Services/ArchiveDiscoveryService.swift cliktok/ViewModels/ArchiveDiscoveryViewModel.swift
