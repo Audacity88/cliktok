@@ -14,9 +14,16 @@ struct InternetArchiveMetadata: Codable {
         let description: String?
         let mediatype: String?
         let collection: [String]?
+        let creator: String?
+        let contributor: String?
+        let date: String?
+        let publicdate: String?
+        let licenseurl: String?
+        let rights: String?
         
         private enum CodingKeys: String, CodingKey {
             case identifier, title, description, mediatype, collection
+            case creator, contributor, date, publicdate, licenseurl, rights
         }
         
         init(from decoder: Decoder) throws {
@@ -25,6 +32,12 @@ struct InternetArchiveMetadata: Codable {
             title = try container.decodeIfPresent(String.self, forKey: .title)
             description = try container.decodeIfPresent(String.self, forKey: .description)
             mediatype = try container.decodeIfPresent(String.self, forKey: .mediatype)
+            creator = try container.decodeIfPresent(String.self, forKey: .creator)
+            contributor = try container.decodeIfPresent(String.self, forKey: .contributor)
+            date = try container.decodeIfPresent(String.self, forKey: .date)
+            publicdate = try container.decodeIfPresent(String.self, forKey: .publicdate)
+            licenseurl = try container.decodeIfPresent(String.self, forKey: .licenseurl)
+            rights = try container.decodeIfPresent(String.self, forKey: .rights)
             
             // Handle both string and array collection fields
             if let collectionString = try? container.decodeIfPresent(String.self, forKey: .collection) {
@@ -32,6 +45,61 @@ struct InternetArchiveMetadata: Codable {
             } else {
                 collection = try container.decodeIfPresent([String].self, forKey: .collection)
             }
+        }
+        
+        // Helper to determine if license is eligible
+        var isLicenseEligible: Bool {
+            let eligibleKeywords = [
+                "public domain",
+                "cc0",
+                "creative commons zero",
+                "pdm", // Public Domain Mark
+                "no known copyright",
+                "cc by", // Attribution only
+                "creative commons attribution"
+            ]
+            
+            // Check licenseurl
+            if let licenseurl = licenseurl?.lowercased() {
+                if licenseurl.contains("creativecommons.org/publicdomain") ||
+                   licenseurl.contains("creativecommons.org/licenses/by/") ||
+                   licenseurl.contains("/zero/") {
+                    return true
+                }
+            }
+            
+            // Check rights field
+            if let rights = rights?.lowercased() {
+                return eligibleKeywords.contains { rights.contains($0) }
+            }
+            
+            // Default to false for safety
+            return false
+        }
+        
+        // Extract normalized license string
+        var normalizedLicense: String? {
+            if let licenseurl = licenseurl {
+                if licenseurl.contains("publicdomain/zero") || licenseurl.contains("/zero/") {
+                    return "CC0"
+                } else if licenseurl.contains("publicdomain/mark") {
+                    return "Public Domain Mark"
+                } else if licenseurl.contains("licenses/by/4.0") {
+                    return "CC BY 4.0"
+                } else if licenseurl.contains("licenses/by/3.0") {
+                    return "CC BY 3.0"
+                }
+            }
+            
+            if let rights = rights?.lowercased() {
+                if rights.contains("public domain") {
+                    return "Public Domain"
+                } else if rights.contains("cc0") {
+                    return "CC0"
+                }
+            }
+            
+            return rights ?? "Unknown License"
         }
     }
     
@@ -359,48 +427,103 @@ actor InternetArchiveAPI {
         }
         
         logger.debug("Fetching from URL: \(url.absoluteString)")
-        let (data, response) = try await URLSession.shared.data(from: url)
         
-        if let httpResponse = response as? HTTPURLResponse {
-            logger.debug("Search response status: \(httpResponse.statusCode)")
-            
-            // Check for error response first
-            if httpResponse.statusCode >= 400 {
-                if let errorResponse = try? JSONDecoder().decode(ArchiveAPIError.self, from: data) {
-                    logger.error("API Error: \(errorResponse.error)")
-                    throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
-                        NSLocalizedDescriptionKey: errorResponse.error
-                    ])
-                }
-                throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
-                    NSLocalizedDescriptionKey: "API request failed"
-                ])
-            }
-            
-            // Try to decode the successful response
+        // Add retry logic with exponential backoff for rate limiting
+        var lastError: Error?
+        for attempt in 0..<3 {
             do {
-                let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
-                logger.info("Found \(searchResponse.response.docs.count) items")
+                let (data, response) = try await URLSession.shared.data(from: url)
                 
-                var videos: [ArchiveVideo] = []
-                
-                for doc in searchResponse.response.docs {
-                    if let metadata = try? await fetchMetadata(identifier: doc.identifier) {
-                        let itemVideos = getVideoFiles(from: metadata)
-                        videos.append(contentsOf: itemVideos)
+                if let httpResponse = response as? HTTPURLResponse {
+                    logger.debug("Search response status: \(httpResponse.statusCode)")
+                    
+                    // Handle rate limiting (HTTP 429)
+                    if httpResponse.statusCode == 429 {
+                        let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                        let waitTime = TimeInterval(retryAfter ?? "5") ?? 5.0
+                        logger.warning("Rate limited (429), waiting \(waitTime)s before retry \(attempt + 1)/3")
+                        
+                        if attempt < 2 {
+                            try await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
+                            continue
+                        } else {
+                            throw NSError(domain: "InternetArchive", code: 429, userInfo: [
+                                NSLocalizedDescriptionKey: "Rate limit exceeded. Please try again later."
+                            ])
+                        }
+                    }
+                    
+                    // Check for error response
+                    if httpResponse.statusCode >= 400 {
+                        if let errorResponse = try? JSONDecoder().decode(ArchiveAPIError.self, from: data) {
+                            logger.error("API Error: \(errorResponse.error)")
+                            throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
+                                NSLocalizedDescriptionKey: errorResponse.error
+                            ])
+                        }
+                        throw NSError(domain: "InternetArchive", code: httpResponse.statusCode, userInfo: [
+                            NSLocalizedDescriptionKey: "API request failed with status \(httpResponse.statusCode)"
+                        ])
+                    }
+                    
+                    // Try to decode the successful response
+                    do {
+                        let searchResponse = try JSONDecoder().decode(ArchiveSearchResponse.self, from: data)
+                        logger.info("Found \(searchResponse.response.docs.count) items")
+                        
+                        var videos: [ArchiveVideo] = []
+                        
+                        for doc in searchResponse.response.docs {
+                            do {
+                                if let metadata = try? await fetchMetadata(identifier: doc.identifier) {
+                                    let itemVideos = getVideoFiles(from: metadata)
+                                    videos.append(contentsOf: itemVideos)
+                                }
+                            } catch {
+                                logger.warning("Failed to fetch metadata for \(doc.identifier): \(error.localizedDescription)")
+                                // Continue with other items
+                                continue
+                            }
+                        }
+                        
+                        return videos
+                        
+                    } catch {
+                        logger.error("Error decoding response: \(error)")
+                        throw NSError(domain: "InternetArchive", code: 500, userInfo: [
+                            NSLocalizedDescriptionKey: "Failed to parse API response: \(error.localizedDescription)"
+                        ])
                     }
                 }
                 
-                return videos
+                throw NSError(domain: "InternetArchive", code: 500, userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid response from server"
+                ])
                 
-            } catch {
-                logger.error("Error decoding response: \(error)")
-                throw error
+            } catch let error as NSError {
+                lastError = error
+                
+                // Check if it's a network error
+                if error.domain == NSURLErrorDomain {
+                    logger.warning("Network error on attempt \(attempt + 1)/3: \(error.localizedDescription)")
+                    
+                    if attempt < 2 {
+                        let delay = pow(2.0, Double(attempt)) // Exponential backoff: 1s, 2s, 4s
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        continue
+                    } else {
+                        throw NSError(domain: "InternetArchive", code: error.code, userInfo: [
+                            NSLocalizedDescriptionKey: "Network error: \(error.localizedDescription). Please check your connection."
+                        ])
+                    }
+                } else {
+                    throw error
+                }
             }
         }
         
-        throw NSError(domain: "InternetArchive", code: 500, userInfo: [
-            NSLocalizedDescriptionKey: "Invalid response from server"
+        throw lastError ?? NSError(domain: "InternetArchive", code: 500, userInfo: [
+            NSLocalizedDescriptionKey: "Failed to fetch items after multiple attempts"
         ])
     }
     
@@ -454,6 +577,12 @@ actor InternetArchiveAPI {
         if let cached = videoCache[metadata.metadata.identifier] {
             logger.debug("Using cached videos for \(metadata.metadata.identifier)")
             return cached
+        }
+        
+        // Filter by license eligibility
+        guard metadata.metadata.isLicenseEligible else {
+            logger.warning("Item \(metadata.metadata.identifier) has ineligible license")
+            return []
         }
         
         // Process video files
@@ -552,7 +681,10 @@ actor InternetArchiveAPI {
                     title: file.title ?? metadata.metadata.title ?? file.name,
                     videoURL: videoURL,
                     thumbnailURL: Self.getThumbnailURL(identifier: metadata.metadata.identifier).absoluteString,
-                    description: file.description ?? metadata.metadata.description ?? ""
+                    description: file.description ?? metadata.metadata.description ?? "",
+                    creator: metadata.metadata.creator ?? metadata.metadata.contributor,
+                    date: metadata.metadata.date ?? metadata.metadata.publicdate,
+                    license: metadata.metadata.normalizedLicense
                 )
                 
                 bestFormatVideos.append(video)

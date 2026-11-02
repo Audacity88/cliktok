@@ -23,15 +23,17 @@ struct RetroVideoInfo: View {
     let hashtags: [String]
     let creator: User?
     let showCreator: Bool
+    let archiveVideo: ArchiveVideo?
     @State private var isDescriptionExpanded = false
     private let maxCharacters = 100
     
-    init(title: String, description: String? = nil, hashtags: [String], creator: User? = nil, showCreator: Bool = false) {
+    init(title: String, description: String? = nil, hashtags: [String], creator: User? = nil, showCreator: Bool = false, archiveVideo: ArchiveVideo? = nil) {
         self.title = title
         self.description = description
         self.hashtags = hashtags
         self.creator = creator
         self.showCreator = showCreator
+        self.archiveVideo = archiveVideo
     }
     
     private var shouldTruncate: Bool {
@@ -54,6 +56,46 @@ struct RetroVideoInfo: View {
             Text(title)
                 .font(.system(.footnote, design: .monospaced))
                 .foregroundColor(.green)
+            
+            // Archive attribution if present
+            if let archiveVideo = archiveVideo {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let creator = archiveVideo.creator {
+                        Text("by \(creator)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.green.opacity(0.8))
+                    }
+                    
+                    HStack(spacing: 4) {
+                        if let license = archiveVideo.license {
+                            Text(license)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.green)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(Color.green.opacity(0.2))
+                                .cornerRadius(4)
+                        }
+                        
+                        if let date = archiveVideo.date {
+                            Text("• \(date)")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    
+                    Link(destination: URL(string: archiveVideo.archiveURL)!) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text("View on Internet Archive")
+                        }
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(.green)
+                    }
+                    .padding(.top, 2)
+                }
+                .padding(.top, 2)
+            }
             
             // Hashtags
             Text(hashtags.map { "#\($0)" }.joined(separator: " "))
@@ -85,7 +127,7 @@ struct RetroVideoInfo: View {
                 }
             }
             
-            // Creator Profile
+            // Creator Profile (for non-archive videos)
             if showCreator, let creator = creator {
                 HStack(alignment: .center, spacing: 8) {
                     NavigationLink(destination: ProfileView(userId: creator.id)) {
@@ -235,6 +277,9 @@ struct UnifiedVideoView: View {
                 Video(
                     id: nil,
                     archiveIdentifier: archiveVideo.identifier,
+                    archiveCreator: archiveVideo.creator,
+                    archiveDate: archiveVideo.date,
+                    archiveLicense: archiveVideo.license,
                     userID: "archive_user",
                     videoURL: archiveVideo.videoURL.optimizedVideoURL(),
                     thumbnailURL: InternetArchiveAPI.getThumbnailURL(identifier: archiveVideo.identifier).absoluteString,

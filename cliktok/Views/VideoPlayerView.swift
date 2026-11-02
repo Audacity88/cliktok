@@ -904,7 +904,17 @@ struct VideoInfoSection: View {
                 description: (video.description ?? "").cleaningHTMLTags(),
                 hashtags: video.hashtags,
                 creator: showCreator ? creator : nil,
-                showCreator: showCreator
+                showCreator: showCreator,
+                archiveVideo: video.isArchiveVideo ? ArchiveVideo(
+                    identifier: video.archiveIdentifier ?? video.stableId,
+                    title: video.caption,
+                    videoURL: video.videoURL,
+                    thumbnailURL: video.thumbnailURL,
+                    description: video.description,
+                    creator: video.archiveCreator,
+                    date: video.archiveDate,
+                    license: video.archiveLicense
+                ) : nil
             )
             .frame(maxWidth: geometry.size.width * 0.85, alignment: .leading)
             
