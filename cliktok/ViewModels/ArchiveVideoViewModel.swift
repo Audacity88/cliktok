@@ -59,42 +59,42 @@ class ArchiveVideoViewModel: ObservableObject {
     // Curated list of known-good Internet Archive items
     // These are verified to have:
     // - Public domain or compatible CC license
-    // - Playable MP4 derivatives
+    // - Playable MP4 derivatives (512kb format)
     // - Valid metadata
     func getCuratedItems() -> [ArchiveVideo] {
         return [
             ArchiveVideo(
                 identifier: "gov.archives.arc.49442",
-                title: "Universal Newsreel Vol. 32 Release 1-8 (1959)",
+                title: "Story of Thomas Alva Edison",
                 videoURL: "https://archive.org/download/gov.archives.arc.49442/gov.archives.arc.49442_512kb.mp4",
                 thumbnailURL: "https://archive.org/services/img/gov.archives.arc.49442",
-                description: "Universal Newsreel, Vol. 32, Release 1-8, 1/5/1959-2/23/1959",
-                creator: "Universal Newsreel",
+                description: "U.S. Information Agency film about Thomas Edison",
+                creator: "National Archives and Records Administration",
                 date: "1959",
                 license: "Public Domain"
             ),
             ArchiveVideo(
                 identifier: "ElephantsDream",
-                title: "Elephant's Dream",
+                title: "Elephants Dream",
                 videoURL: "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4",
                 thumbnailURL: "https://archive.org/services/img/ElephantsDream",
                 description: "The world's first open movie, made entirely with open source graphics software",
-                creator: "Blender Foundation",
+                creator: "Orange Open Movie Project Studio",
                 date: "2006",
-                license: "CC BY 2.5"
+                license: "CC BY 3.0"
             ),
             ArchiveVideo(
-                identifier: "night_of_the_living_dead",
-                title: "Night of the Living Dead",
-                videoURL: "https://archive.org/download/night_of_the_living_dead/night_of_the_living_dead_512kb.mp4",
-                thumbnailURL: "https://archive.org/services/img/night_of_the_living_dead",
-                description: "Classic 1968 horror film directed by George Romero",
-                creator: "George A. Romero",
-                date: "1968",
+                identifier: "gov.archives.arc.1257628",
+                title: "Moonwalk One",
+                videoURL: "https://archive.org/download/gov.archives.arc.1257628/gov.archives.arc.1257628_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/gov.archives.arc.1257628",
+                description: "Documentary about the Apollo 11 moon landing",
+                creator: "National Archives and Records Administration",
+                date: "1970",
                 license: "Public Domain"
             ),
             ArchiveVideo(
-                identifier: "BigBuckBunny",
+                identifier: "BigBuckBunny_328",
                 title: "Big Buck Bunny",
                 videoURL: "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
                 thumbnailURL: "https://archive.org/services/img/BigBuckBunny_328",
@@ -104,13 +104,13 @@ class ArchiveVideoViewModel: ObservableObject {
                 license: "CC BY 3.0"
             ),
             ArchiveVideo(
-                identifier: "prelinger",
-                title: "Prelinger Archives Sample",
-                videoURL: "https://archive.org/download/prelinger/prelinger_512kb.mp4",
-                thumbnailURL: "https://archive.org/services/img/prelinger",
-                description: "Sample from the Prelinger Archives collection",
+                identifier: "ToEnrichMank",
+                title: "To Enrich Mankind",
+                videoURL: "https://archive.org/download/ToEnrichMank/ToEnrichMank_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/ToEnrichMank",
+                description: "Educational film from the Prelinger Archives",
                 creator: "Prelinger Archives",
-                date: "Various",
+                date: "1950s",
                 license: "Public Domain"
             )
         ]
