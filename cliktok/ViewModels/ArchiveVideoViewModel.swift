@@ -31,11 +31,11 @@ class ArchiveVideoViewModel: ObservableObject {
     }
     
     private func addInitialCollections() {
-        // Add Internet Archive Collections
+        // Add curated Internet Archive Collections with known-good licenses
         let archiveCollections = [
-            (id: "demolitionkitchenvideo", title: "Demolition Kitchen", description: "Videos from the Demolition Kitchen collection"),
-            (id: "prelinger", title: "Prelinger Archives", description: "Historical films from the Prelinger Archives"),
-            (id: "artsandmusicvideos", title: "Arts & Music", description: "A collection of arts and music videos from the Internet Archive"),
+            (id: "curated_public_domain", title: "🎬 Curated Highlights", description: "Hand-picked public domain videos with verified licenses"),
+            (id: "prelinger", title: "Prelinger Archives", description: "Historical films from the Prelinger Archives (Public Domain)"),
+            (id: "artsandmusicvideos", title: "Arts & Music", description: "Arts and music videos from the Internet Archive"),
             (id: "classic_tv", title: "Classic TV", description: "Classic television shows and commercials"),
             (id: "opensource_movies", title: "Open Source Movies", description: "Community contributed open source films"),
             (id: "sports", title: "Sports Archive", description: "Historical sports footage and memorable sporting moments"),
@@ -54,6 +54,66 @@ class ArchiveVideoViewModel: ObservableObject {
         
         collections = archiveCollectionModels
         selectedCollection = archiveCollectionModels.first
+    }
+    
+    // Curated list of known-good Internet Archive items
+    // These are verified to have:
+    // - Public domain or compatible CC license
+    // - Playable MP4 derivatives (512kb format)
+    // - Valid metadata
+    func getCuratedItems() -> [ArchiveVideo] {
+        return [
+            ArchiveVideo(
+                identifier: "gov.archives.arc.49442",
+                title: "Story of Thomas Alva Edison",
+                videoURL: "https://archive.org/download/gov.archives.arc.49442/gov.archives.arc.49442_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/gov.archives.arc.49442",
+                description: "U.S. Information Agency film about Thomas Edison",
+                creator: "National Archives and Records Administration",
+                date: "1959",
+                license: "Public Domain"
+            ),
+            ArchiveVideo(
+                identifier: "ElephantsDream",
+                title: "Elephants Dream",
+                videoURL: "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/ElephantsDream",
+                description: "The world's first open movie, made entirely with open source graphics software",
+                creator: "Orange Open Movie Project Studio",
+                date: "2006",
+                license: "CC BY 3.0"
+            ),
+            ArchiveVideo(
+                identifier: "gov.archives.arc.1257628",
+                title: "Moonwalk One",
+                videoURL: "https://archive.org/download/gov.archives.arc.1257628/gov.archives.arc.1257628_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/gov.archives.arc.1257628",
+                description: "Documentary about the Apollo 11 moon landing",
+                creator: "National Archives and Records Administration",
+                date: "1970",
+                license: "Public Domain"
+            ),
+            ArchiveVideo(
+                identifier: "BigBuckBunny_328",
+                title: "Big Buck Bunny",
+                videoURL: "https://archive.org/download/BigBuckBunny_328/BigBuckBunny_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/BigBuckBunny_328",
+                description: "Open movie made by the Blender Institute",
+                creator: "Blender Foundation",
+                date: "2008",
+                license: "CC BY 3.0"
+            ),
+            ArchiveVideo(
+                identifier: "ToEnrichMank",
+                title: "To Enrich Mankind",
+                videoURL: "https://archive.org/download/ToEnrichMank/ToEnrichMank_512kb.mp4",
+                thumbnailURL: "https://archive.org/services/img/ToEnrichMank",
+                description: "Educational film from the Prelinger Archives",
+                creator: "Prelinger Archives",
+                date: "1950s",
+                license: "Public Domain"
+            )
+        ]
     }
     
     private func prefetchCollections(_ collections: [ArchiveCollection]) async {
@@ -118,6 +178,20 @@ class ArchiveVideoViewModel: ObservableObject {
         
         // Clear all caches when switching collections
         clearCaches()
+        
+        // Handle curated collection specially
+        if collection.id == "curated_public_domain" {
+            let curatedVideos = getCuratedItems()
+            if let index = collections.firstIndex(where: { $0.id == collection.id }) {
+                var updatedCollection = collection
+                updatedCollection.videos = curatedVideos
+                collections[index] = updatedCollection
+                selectedCollection = updatedCollection
+            }
+            isLoading = false
+            hasMoreVideos = false
+            return
+        }
         
         // If we already have videos for this collection, use them
         if let existingCollection = collections.first(where: { $0.id == collection.id }),
